@@ -86,6 +86,15 @@ volume = {volume}
 poll_interval = 3.0
 annoying = false
 quiet_hours = [22, 8]
+
+# Web integration fields (Optional)
+telegram_token = ""
+telegram_chat_id = ""
+email_smtp_server = "smtp.gmail.com"
+email_smtp_port = 587
+email_sender = ""
+email_password = ""
+email_receiver = ""
 '''
         )
         print(f"\n✅ Config successfully written to {target}")
