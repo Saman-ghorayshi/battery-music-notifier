@@ -1,2 +1,7 @@
 sounddevice>=0.4.6
 soundfile>=0.12.1
+psutil>=5.9.0
+requests>=2.31.0
+PySocks>=1.7.1
+pytest>=7.4.4
+pytest-mock>=3.15.1

@@ -5,8 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "battery-music-notifier"
 version = "1.0.0"
-description = "Play a song when your battery hits your target charge."
+description = "A distributed, proxy-isolated cross-platform battery telemetry daemon and alerting tool."
+readme = "README.md"
 requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Saman" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
 dependencies = [
     "sounddevice>=0.4.6",
     "soundfile>=0.12.1",
