@@ -27,7 +27,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
-
     if args.cmd == "init":
         target = APP_DIR / "config.toml"
         if target.exists() and not args.force:
@@ -35,10 +34,37 @@ def main(argv=None) -> int:
             return 1
 
         print("🎵 Welcome to the Battery Music Notifier setup!")
-        music_path = input("Enter path to your music file (e.g., ~/Music/song.wav): ").strip()
+        
+        print("\n[Opening file dialog to select your music file...]")
+        music_path = ""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes('-topmost', True)
+            music_path = filedialog.askopenfilename(
+                title="Select Battery Notification Music",
+                filetypes=[("Audio Files", "*.wav *.mp3 *.flac"), ("All Files", "*.*")]
+            )
+            root.destroy()
+        except ImportError:
+            print("⚠️ Tkinter not available on this system environment.")
+
+        if not music_path:
+            print("⚠️ No file selected or graphical interface unavailable. Fallback: manual entry.")
+            music_path = input("Enter path to your music file (e.g., ~/Music/song.wav): ").strip()
+        else:
+            print(f"✅ Selected: {music_path}")
+
         min_pct = input("Enter minimum battery percentage to trigger [99]: ").strip() or "99"
         max_pct = input("Enter maximum battery percentage [100]: ").strip() or "100"
         volume = input("Enter volume 0.0 to 1.0 [0.8]: ").strip() or "0.8"
+
+        # 2. Ask User for Auto-Start
+        autostart_ans = input("\nDo you want to automatically start this app on boot? (y/N): ").strip().lower()
+        enable_auto = autostart_ans in ("y", "yes")
 
         APP_DIR.mkdir(parents=True, exist_ok=True)
         target.write_text(
@@ -53,6 +79,15 @@ quiet_hours = [22, 8]
 '''
         )
         print(f"\n✅ Config successfully written to {target}")
+
+        # Execute autostart configuration if requested
+        if enable_auto:
+            from .autostart import enable_autostart
+            if enable_autostart():
+                print("✅ Auto-start successfully enabled for your OS!")
+            else:
+                print("❌ Failed to configure auto-start. Check logs for details.")
+                
         return 0
 
     cfg = Config.load(getattr(args, "config", None))
