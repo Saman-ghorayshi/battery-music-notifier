@@ -7,7 +7,7 @@ def test_macos_parse(monkeypatch):
     b.system = "Darwin"
     monkeypatch.setattr(
         "subprocess.check_output",
-        lambda *a, **k: b" -InternalBattery-0 (id=1) 100%; AC Power; charged"
+        lambda *a, **k: " -InternalBattery-0 (id=1) 100%; AC Power; charged"
     )
     info = b.read()
     assert info.percentage == 100 and info.charging is True
