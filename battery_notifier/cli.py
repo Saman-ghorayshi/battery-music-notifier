@@ -23,6 +23,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("battery", help="Print current battery info and exit.")
     init = sub.add_parser("init", help="Run setup wizard and write config file.")
     init.add_argument("--force", action="store_true")
+    # 3. Add Server Subcommand
+    serve = sub.add_parser("serve", help="Start the offline music server (Run this on Laptop).")
+    serve.add_argument("--host", default="127.0.0.1", help="Host address to bind to.")
+    serve.add_argument("--port", type=int, default=8000, help="Port to listen on.")
+    serve.add_argument("-v", "--verbose", action="store_true")
+
+    # 4. Add Client Subcommand
+    client = sub.add_parser("client", help="Start the remote battery monitor (Run this on Phone).")
+    client.add_argument("--host", default="127.0.0.1", help="Laptop socket connection address.")
+    client.add_argument("--port", type=int, default=8000, help="Laptop socket communication port.")
+    client.add_argument("-v", "--verbose", action="store_true")
     return p
 
 def main(argv=None) -> int:
@@ -62,7 +73,6 @@ def main(argv=None) -> int:
         max_pct = input("Enter maximum battery percentage [100]: ").strip() or "100"
         volume = input("Enter volume 0.0 to 1.0 [0.8]: ").strip() or "0.8"
 
-        # 2. Ask User for Auto-Start
         autostart_ans = input("\nDo you want to automatically start this app on boot? (y/N): ").strip().lower()
         enable_auto = autostart_ans in ("y", "yes")
 
@@ -80,7 +90,6 @@ quiet_hours = [22, 8]
         )
         print(f"\n✅ Config successfully written to {target}")
 
-        # Execute autostart configuration if requested
         if enable_auto:
             from .autostart import enable_autostart
             if enable_autostart():
@@ -96,10 +105,20 @@ quiet_hours = [22, 8]
         from .battery import Battery
         print(Battery().read())
         return 0
+    
+    if args.cmd == "serve":
+        setup_logging(args.verbose, cfg.log_file)
+        from .remote import NotificationServer
+        NotificationServer(cfg, args.host, args.port).run()
+        return 0
 
-    # Run command
+    if args.cmd == "client":
+        setup_logging(args.verbose, cfg.log_file)
+        from .remote import RemoteMonitor
+        RemoteMonitor(cfg, args.host, args.port).run()
+        return 0
     if args.music: cfg.music_files = args.music
-    # Fix: Clean argument mapping
+
     if args.min is not None: cfg.min_percentage = args.min
     if args.max is not None: cfg.max_percentage = args.max
     if args.volume is not None: cfg.volume = args.volume
