@@ -13,19 +13,29 @@ class BatteryInfo:
 
 class Battery:
     """Robust cross-platform battery reader supporting Desktop OS and Android Termux."""
+
     def read(self) -> BatteryInfo:
         # Check if running inside Termux on Android
         if "TERMUX_VERSION" in os.environ or shutil.which("termux-battery-status"):
+            if not shutil.which("termux-battery-status"):
+                raise RuntimeError(
+                    " Termux telemetry binary missing.\n"
+                    " FIX: Run 'pkg install termux-api' inside Termux, "
+                    "and ensure the 'Termux:API' add-on app is installed on your Android device."
+                )
             try:
                 result = subprocess.run(["termux-battery-status"], capture_output=True, text=True, check=True)
                 data = json.loads(result.stdout)
-                # 'status' returns 'CHARGING', 'DISCHARGING', 'FULL', etc.
                 is_charging = data.get("status") in ("CHARGING", "FULL")
                 return BatteryInfo(percentage=int(data.get("percentage", 0)), charging=is_charging)
             except Exception as e:
-                raise RuntimeError(f"Termux API execution failed. Did you run 'pkg install termux-api'? Error: {e}")
+                raise RuntimeError(
+                    f" Termux API call failed.\n"
+                    f" FIX: Make sure the 'Termux:API' Android app has background permissions enabled.\n"
+                    f"Details: {e}"
+                )
 
-        # Desktop fallback (Windows, macOS, Desktop Linux)
+        # Desktop fallback
         batt = psutil.sensors_battery()
         if batt is None:
             raise RuntimeError("No battery telemetry detected on this system hardware.")
