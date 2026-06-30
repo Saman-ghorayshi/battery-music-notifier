@@ -1,3 +1,4 @@
+# battery_notifier/config.py
 from __future__ import annotations
 import os
 from dataclasses import dataclass, field
@@ -18,6 +19,15 @@ class Config:
     annoying: bool = False
     quiet_hours: list[int] = field(default_factory=lambda: [22, 8])
     log_file: Optional[Path] = None
+    
+    # ✨ New Web Hook Parameters
+    telegram_token: str = ""
+    telegram_chat_id: str = ""
+    email_smtp_server: str = "smtp.gmail.com"
+    email_smtp_port: int = 587
+    email_sender: str = ""
+    email_password: str = ""
+    email_receiver: str = ""
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Config":
