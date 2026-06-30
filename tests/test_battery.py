@@ -48,9 +48,8 @@ def test_remote_monitor_triggers_start_signal(mocker):
 
     mock_send.assert_any_call("START")
 
-
 def test_server_dispatches_web_alerts_safely(mocker):
-    """Verify that the server async alert worker fires web hooks safely."""
+    """Verify that the server async alert worker fires web hooks safely when internet is active."""
     cfg = Config(
         telegram_token="12345:fake_token", 
         telegram_chat_id="67890",
@@ -60,11 +59,18 @@ def test_server_dispatches_web_alerts_safely(mocker):
     )
     server = NotificationServer(cfg)
     
-    mocker.patch('socket.create_connection')
-    mock_urlopen = mocker.patch('urllib.request.urlopen')
+    mock_head = mocker.patch('requests.head')
+    mock_head.return_value.status_code = 200 
+    
+    mock_post = mocker.patch('requests.post')
+    mock_post.return_value.status_code = 200  
+    
     mock_smtp = mocker.patch('smtplib.SMTP')
 
+    # Execute
     server._dispatch_web_alerts()
 
-    mock_urlopen.assert_called_once()
+    # Assertions
+    mock_head.assert_called()
+    mock_post.assert_called_once()
     mock_smtp.assert_called_once()
