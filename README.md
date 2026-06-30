@@ -30,14 +30,22 @@ Designed with both local simplicity and complex client-server topologies in mind
 
 Clone your custom repository and install the module locally in editable mode along with development dependencies:
 
+For Linux, macOS, or Android Termux Users
 ```bash
 git clone https://github.com/Saman-ghorayshi/battery-music-notifier.git
 cd battery-music-notifier
+chmod +x install.sh
+./install.sh
 pip install -e ".[dev]"
 ```
+For Windows Users (Command Prompt / PowerShell)
+```bash
+git clone https://github.com/Saman-ghorayshi/battery-music-notifier.git
+cd battery-music-notifier
+install.bat
 
-### 2. Guided Interactive Setup
-
+pip install -e ".[dev]"
+```
 Launch the conversational setup wizard to select your notification track via a native file selector, configure battery thresholds, and set up automatic system startup properties:
 
 ```bash
