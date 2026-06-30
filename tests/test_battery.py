@@ -1,28 +1,22 @@
 import pytest
-from unittest.mock import patch
-from battery_notifier.battery import Battery, BatteryInfo
+from typing import NamedTuple  
+from battery_notifier.battery import Battery
 
-def test_macos_parse(monkeypatch):
-    b = Battery()
-    b.system = "Darwin"
+# Mock structure mimicking psutil return values
+class MockBattery(NamedTuple):
+    percent: float
+    power_plugged: bool
+    secsleft: int
+
+def test_psutil_battery_reading(monkeypatch):
+    # Setup mock telemetry values: 85% charge, currently plugged in
     monkeypatch.setattr(
-        "subprocess.check_output",
-        lambda *a, **k: " -InternalBattery-0 (id=1) 100%; AC Power; charged"
+        "psutil.sensors_battery",
+        lambda: MockBattery(percent=85.0, power_plugged=True, secsleft=-2)
     )
-    info = b.read()
-    assert info.percentage == 100 and info.charging is True
-
-def test_linux_acpi_parse(monkeypatch):
+    
     b = Battery()
-    b.system = "Linux"
-    # Mock upower failing, falling back to acpi
-    def mock_subproc(*args, **kwargs):
-        if "upower" in args[0]:
-            raise FileNotFoundError("not found")
-        return b"Battery 0: Charging, 87%, 01:23:45 until charged"
-    monkeypatch.setattr("subprocess.check_output", mock_subproc)
-
-    # Temporarily remove upower logic to test acpi fallback
-    b._linux = lambda: BatteryInfo(87, True)
     info = b.read()
-    assert info.percentage == 87 and info.charging is True
+    
+    assert info.percentage == 85
+    assert info.charging is True
