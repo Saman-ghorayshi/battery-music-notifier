@@ -64,11 +64,12 @@ quiet_hours = [22, 8]
 
     # Run command
     if args.music: cfg.music_files = args.music
-    # NOTE: We will fix this ugly mapping below in the debug step
-    for attr in ("min", "max", "volume", "poll", "annoying"):
-        v = getattr(args, attr, None)
-        if v is not None:
-            setattr(cfg, {"min":"min_percentage","max":"max_percentage","poll":"poll_interval"}[attr] if attr in ("min","max","poll") else attr, v)
+    # Fix: Clean argument mapping
+    if args.min is not None: cfg.min_percentage = args.min
+    if args.max is not None: cfg.max_percentage = args.max
+    if args.volume is not None: cfg.volume = args.volume
+    if args.poll is not None: cfg.poll_interval = args.poll
+    if args.annoying: cfg.annoying = True
 
     setup_logging(args.verbose, cfg.log_file)
     if not cfg.music_files:

@@ -28,18 +28,32 @@ class Player:
         return True
 
     def _loop(self, files):
+        import time
         try:
             first = random.choice(files)
             data, sr = sf.read(first, dtype="float32")
             while not self._stop.is_set():
                 sd.play(data * self.volume, sr)
-                sd.wait()  # NOTE: We will find out later this blocks stopping!
+                # Fix: Wait actively so we can interrupt immediately
+                while sd.get_stream().active and not self._stop.is_set():
+                    time.sleep(0.1)
+                if self._stop.is_set():
+                    break
                 if not self.annoying:
                     break
+                nxt = random.choice(files)
+                if nxt != first:
+                    data, sr = sf.read(nxt, dtype="float32")
         except Exception as e:
             log.error("Playback error: %s", e)
 
     def stop(self) -> None:
         if not self._playing: return
         self._stop.set()
+        try:
+            sd.stop()  # Fix: Force stop sounddevice immediately
+            if sd.get_stream(): sd.get_stream().stop()
+        except Exception: pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2)
         self._playing = False

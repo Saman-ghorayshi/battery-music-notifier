@@ -16,7 +16,7 @@ class Config:
     volume: float = 0.8
     poll_interval: float = 3.0
     annoying: bool = False
-    quiet_hours: tuple[int, int] = (22, 8)  # NOTE: We will fix this type hint later
+    quiet_hours: list[int] = field(default_factory=lambda: [22, 8])
     log_file: Optional[Path] = None
 
     @classmethod
