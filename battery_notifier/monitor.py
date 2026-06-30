@@ -12,12 +12,24 @@ class Monitor:
         self.battery = Battery()
         self.player = Player(cfg.music_files, cfg.volume, cfg.annoying)
         self.notifier = Notifier()
-
     def run(self) -> None:
         log.info("Monitoring started.")
         try:
             while True:
+                # Enforce Quiet Hours
+                current_hour = datetime.datetime.now().hour
+                q_start, q_end = self.cfg.quiet_hours[0], self.cfg.quiet_hours[1]
+                
+                is_quiet = (current_hour >= q_start or current_hour < q_end) if q_start > q_end else (q_start <= current_hour < q_end)
+                
+                if is_quiet:
+                    if self.player.playing:
+                        self.player.stop()
+                    time.sleep(self.cfg.poll_interval)
+                    continue
+
                 info = self.battery.read()
+                
                 in_target = (self.cfg.min_percentage <= info.percentage <= self.cfg.max_percentage)
 
                 if info.charging and in_target and not self.player.playing:
