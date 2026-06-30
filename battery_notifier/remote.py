@@ -55,46 +55,49 @@ class NotificationServer:
                 print("\nShutting down server safely...")
             finally:
                 self.player.stop()
-
     def _dispatch_web_alerts(self) -> None:
         """Asynchronously tests connectivity and shoots out web notifications safely."""
-        # 1. Establish/Verify Internet Connection
+        import requests
+        
+        proxies = {}
+        if self.cfg.proxy_url:
+            log.info("Routing web notifications through proxy configuration: %s", self.cfg.proxy_url)
+            proxies = {
+                "http": self.cfg.proxy_url,
+                "https": self.cfg.proxy_url
+            }
+
         has_internet = False
-        for attempt in range(3):
+        fallback_targets = ["https://www.google.com", "https://www.wikipedia.org"]
+        
+        for target in fallback_targets:
             try:
-                # Fast connection test to Cloudflare DNS without blocking
-                with socket.create_connection(("1.1.1.1", 53), timeout=3):
+                response = requests.head(target, proxies=proxies, timeout=4)
+                if response.status_code < 400:
                     has_internet = True
                     break
-            except OSError:
-                log.warning("Network link unavailable. Retrying connection check... (%d/3)", attempt + 1)
-                time.sleep(2)
-                
+            except requests.RequestException:
+                continue
+
         if not has_internet:
-            log.error("Could not establish web connection. Web notifications skipped.")
+            log.error("Could not verify global web connection. Web notifications skipped.")
             return
 
-        # 2. Fire Telegram Webhook
         if self.cfg.telegram_token and self.cfg.telegram_chat_id:
             try:
-                url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
-                payload = json.dumps({
+                telegram_url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
+                payload = {
                     "chat_id": self.cfg.telegram_chat_id,
                     "text": "🔋 Battery Target Reached! Your charging device is ready."
-                }).encode('utf-8')
-                
-                req = urllib.request.Request(
-                    url, data=payload, 
-                    headers={'Content-Type': 'application/json'}, 
-                    method='POST'
-                )
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    if response.status == 200:
-                        log.info("Telegram notification successfully routed.")
+                }
+                r = requests.post(telegram_url, json=payload, proxies=proxies, timeout=5)
+                if r.status_code == 200:
+                    log.info("Telegram notification successfully routed.")
+                else:
+                    log.warning("Telegram API rejected transmission (Status Code: %d). It might be blocked regionally.", r.status_code)
             except Exception as e:
                 log.error("Failed to transmit Telegram alert: %s", e)
 
-        # 3. Fire Email Notification via SMTP
         if self.cfg.email_sender and self.cfg.email_receiver and self.cfg.email_password:
             try:
                 msg = EmailMessage()
