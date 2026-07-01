@@ -1,14 +1,16 @@
 # 🎵 Battery Music Notifier
 
-An enterprise-grade, cross-platform distributed network telemetry application. This tool monitors system battery states and coordinates multi-threaded localized alerts, remote SMTP dispatches, and proxy-isolated Telegram webhooks.
+An advanced, cross-platform distributed network telemetry application. This tool monitors system battery states and coordinates multi-threaded localized alerts, remote SMTP dispatches, and proxy-isolated Telegram webhooks.
 
-Designed with both local simplicity and complex client-server topologies in mind, it allows you to cross-manage device metrics (like your Android phone running Termux and your Windows/macOS/Linux laptop) seamlessly over local networks, wireless hotspots, or offline USB tunnels.
+Designed with both local simplicity and complex client-server topologies in mind, it allows you to cross-manage device metrics (like your Android phone running Termux and your Windows/macOS/Linux laptop) seamlessly over local networks, wireless hotspots, or offline USB tunnels with zero manual configuration.
 
 ---
 
 ## 🚀 Advanced Architectural Features
 
 - **Symmetric Client-Server Topology** — Built with fully decoupled, polymorphic runtime endpoints. The application can run entirely on a single machine or split into distributed roles. For example, your Android device (inside Termux) can track local telemetry and trigger high-fidelity playback on your laptop across a local connection.
+
+- **Wireless Auto-Discovery (Zero-Config)** — Employs a lightweight, built-in UDP beacon broadcasting system. When running over a local Wi-Fi router or hotspot, the phone client automatically detects the laptop's IP address in real-time, eliminating the need to manually look up or configure static IP addresses.
 
 - **Non-Blocking Thread Isolation** — Webhooks (Telegram API, SMTP) execute inside isolated background daemon threads. Connection testing and retry logic are decoupled from the main socket listener, preventing system deadlocks during regional network blocks or internet blackouts.
 
@@ -27,7 +29,7 @@ Designed with both local simplicity and complex client-server topologies in mind
 | File | Description |
 |---|---|
 | `battery.py` | Dynamic platform interfaces reading hardware metrics (`psutil`) and mobile terminals (`termux-battery-status`). |
-| `remote.py` | High-efficiency TCP socket abstraction handling inter-device commands, offline signals, and asynchronous alerting hooks. |
+| `remote.py` | High-efficiency TCP socket abstraction handling inter-device commands, UDP wireless auto-discovery beacons, and asynchronous alerting hooks. |
 | `adb_helper.py` | Automated background USB bridge search engine and port forwarding controller. |
 | `diagnostics.py` | Live validation suite running asset location scans, network telemetry evaluations, proxy sweeps, and censorship bypass checks. |
 | `player.py` | Threaded, volume-aware audio loop handling state-safe track interruptions and platform-specific terminal fallbacks. |
@@ -46,7 +48,7 @@ Clone your repository and run the automated bootstrap script tailored to your op
 **🤖 For Linux, macOS, or Android Termux Users**
 
 ```bash
-git clone https://github.com/username/battery-music-notifier.git
+git clone https://github.com/Saman-ghorayshi/battery-music-notifier.git
 cd battery-music-notifier
 chmod +x install.sh
 ./install.sh
@@ -55,7 +57,7 @@ chmod +x install.sh
 **💻 For Windows Users (Command Prompt / PowerShell)**
 
 ```powershell
-git clone https://github.com/username/battery-music-notifier.git
+git clone https://github.com/Saman-ghorayshi/battery-music-notifier.git
 cd battery-music-notifier
 install.bat
 ```
@@ -90,7 +92,7 @@ battery-music run
 
 ### Scenario B: Distributed Network (Offline USB Cable Tunnel)
 
-**Setup 1: Phone Monitors ➔ Laptop Plays Sound**
+**Setup: Phone Monitors ➔ Laptop Plays Sound**
 
 Ideal when your phone is charging on your desk or a USB port and you want your laptop's speakers to alert you.
 
@@ -106,64 +108,22 @@ On your **Phone** (inside Termux) — start the tracking client targeting your l
 battery-music client --host 127.0.0.1 --port 8000
 ```
 
-**Setup 2: Laptop Monitors ➔ Phone Plays Sound (The Reverse!)**
+### Scenario C: Wireless Hotspot / Wi-Fi Network (Zero-Config)
 
-Ideal when your laptop is plugged in across the room and you want your phone in your pocket to ring.
+If your laptop is connected directly to your phone's Wi-Fi hotspot, or they're both on the same home Wi-Fi network, you don't have to look up or type any IP addresses!
 
-On your **Phone** (inside Termux) — run the socket listener server:
+**Setup: Phone Monitors ➔ Laptop Plays Sound**
 
-```bash
-battery-music serve --port 8000
-```
-
-On your **Laptop** — establish an ADB forward tunnel to route outbound laptop signals down the USB charging cable:
-
-```bash
-adb forward tcp:8000 tcp:8000
-```
-
-On your **Laptop** — start the tracking client targeting your local loopback address:
-
-```bash
-battery-music client --host 127.0.0.1 --port 8000
-```
-
-### Scenario C: Distributed Network (Wireless Wi-Fi / Hotspot)
-
-If your laptop is connected directly to your phone's Wi-Fi hotspot, or they are both connected to the same local Wi-Fi router, you can run the program completely cord-free!
-
-**Setup 1: Phone Monitors ➔ Laptop Plays Sound**
-
-Find your Laptop's local IP:
-- **Windows**: Run `ipconfig` (look for the IPv4 Address under your Wi-Fi Adapter, e.g., `192.168.43.15`).
-- **macOS/Linux**: Run `ifconfig` or `ip a`.
-
-On your **Laptop** — start the server listening on all available incoming network interfaces (`0.0.0.0`):
+On your **Laptop** — run the server listening on all incoming interfaces:
 
 ```bash
 battery-music serve --host 0.0.0.0 --port 8000
 ```
 
-On your **Phone** (inside Termux) — run the battery-monitoring client pointing directly to your laptop's local network IP:
+On your **Phone** (inside Termux) — simply start the tracking client without a host IP parameter. It will automatically scan the network, find your laptop, and connect:
 
 ```bash
-battery-music client --host YOUR_LAPTOP_IP_HERE --port 8000
-```
-
-**Setup 2: Laptop Monitors ➔ Phone Plays Sound (The Reverse!)**
-
-Find your Phone's local IP: inside Termux, run `ip route`, or check your phone's Wi-Fi hotspot settings status page.
-
-On your **Phone** (inside Termux) — start the server listening on all network interfaces:
-
-```bash
-battery-music serve --host 0.0.0.0 --port 8000
-```
-
-On your **Laptop** — start the client monitoring your battery and pointing directly to your phone's network IP:
-
-```bash
-battery-music client --host YOUR_PHONE_IP_HERE --port 8000
+battery-music client --port 8000
 ```
 
 ---

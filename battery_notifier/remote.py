@@ -1,39 +1,79 @@
-# battery_notifier/remote.py
 from __future__ import annotations
 import socket
+import threading
 import time
 import logging
-import threading
-import urllib.request
-import json
-import smtplib
-from email.message import EmailMessage
+import requests
 from .player import Player
-from .battery import Battery
 from .adb_helper import auto_setup_usb_bridge
 
 log = logging.getLogger(__name__)
 
+# Dedicated UDP Port for wireless auto-discovery beacons
+DISCOVERY_UDP_PORT = 8002
+BEACON_MESSAGE = b"BATTERY_MUSIC_BEACON_V1"
+
 class NotificationServer:
-    """Runs on your laptop. Listens offline over TCP, handles online alerts asynchronously."""
-    def __init__(self, cfg, host: str = "127.0.0.1", port: int = 8000):
-        self.cfg = cfg
+    def __init__(self, host: str = "0.0.0.0", port: int = 8000, config = None):
         self.host = host
         self.port = port
-        self.player = Player(cfg.music_files, cfg.volume, cfg.annoying)
+        self.cfg = config
+        self.player = Player(config.music_files, config.volume, config.annoying) if config else None
         self._stop_event = threading.Event()
+        self._beacon_thread = None
+
+    def _run_udp_beacon(self) -> None:
+        """Periodically broadcasts UDP packets so clients can auto-discover this laptop's IP."""
+        log.info("Starting UDP discovery beacon broadcasts...")
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            # Bind to an ephemeral port to send from, but target the broadcast address
+            while not self._stop_event.is_set():
+                try:
+                    # Broadcast to the entire local subnet
+                    s.sendto(BEACON_MESSAGE, ("255.255.255.255", DISCOVERY_UDP_PORT))
+                except Exception as e:
+                    log.debug("UDP beacon broadcast failed: %s", e)
+                time.sleep(2.0)
+
+    def _dispatch_web_alerts(self) -> None:
+        """Asynchronously triggers external web hooks (Telegram, SMTP) in a separate thread."""
+        if not self.cfg:
+            return
+
+        # 1. Telegram Dispatch Hook
+        if self.cfg.telegram_token and self.cfg.telegram_chat_id:
+            proxies = {"http": self.cfg.proxy_url, "https": self.cfg.proxy_url} if self.cfg.proxy_url else None
+            try:
+                url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
+                payload = {"chat_id": self.cfg.telegram_chat_id, "text": "🔋 Alert: Laptop battery threshold crossed!"}
+                requests.post(url, json=payload, proxies=proxies, timeout=5)
+                log.info("Telegram notification sent successfully.")
+            except Exception as e:
+                log.error("Failed to dispatch Telegram notification: %s", e)
 
     def run(self) -> None:
-        print(" Initializing automatic USB ADB Bridge...")
-        auto_setup_usb_bridge(mode="reverse", port=self.port, max_retries=10)
+        # Automatically set up the USB ADB bridge if a device is connected
+        print("🔗 Initializing automatic USB ADB Bridge check...")
+        auto_setup_usb_bridge(mode="reverse", port=self.port, max_retries=3)
+
+        # Start the UDP Auto-Discovery Beacon thread
+        self._beacon_thread = threading.Thread(target=self._run_udp_beacon, daemon=True)
+        self._beacon_thread.start()
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind((self.host, self.port))
+            try:
+                s.bind((self.host, self.port))
+            except Exception as e:
+                print(f"❌ Error binding server to {self.host}:{self.port}. Details: {e}")
+                return
+                
             s.listen()
             s.settimeout(1.0)
             
             print(f"\n📡 Server listening on {self.host}:{self.port}... (Always Open)")
+            print("✨ Wireless auto-discovery is active! Phones can connect automatically.")
             log.info("Remote socket server initialization successful.")
 
             try:
@@ -47,113 +87,72 @@ class NotificationServer:
                         data = conn.recv(1024).decode('utf-8').strip()
                         if data == "START":
                             log.info("Received remote command: START")
-                            self.player.play()
-                            
-                            # Thread Isolation: Run web alerts in the background
+                            if self.player:
+                                self.player.play()
+                            # Run web alerts in the background thread
                             threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
                             
                         elif data == "STOP":
                             log.info("Received remote command: STOP")
-                            self.player.stop()
+                            if self.player:
+                                self.player.stop()
             except KeyboardInterrupt:
                 print("\nShutting down server safely...")
             finally:
-                self.player.stop()
-    def _dispatch_web_alerts(self) -> None:
-        """Asynchronously tests connectivity and shoots out web notifications safely."""
-        import requests
-        
-        proxies = {}
-        if self.cfg.proxy_url:
-            log.info("Routing web notifications through proxy configuration: %s", self.cfg.proxy_url)
-            proxies = {
-                "http": self.cfg.proxy_url,
-                "https": self.cfg.proxy_url
-            }
-
-        has_internet = False
-        fallback_targets = ["https://www.google.com", "https://www.wikipedia.org"]
-        
-        for target in fallback_targets:
-            try:
-                response = requests.head(target, proxies=proxies, timeout=4)
-                if response.status_code < 400:
-                    has_internet = True
-                    break
-            except requests.RequestException:
-                continue
-
-        if not has_internet:
-            log.error("Could not verify global web connection. Web notifications skipped.")
-            return
-
-        if self.cfg.telegram_token and self.cfg.telegram_chat_id:
-            try:
-                telegram_url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
-                payload = {
-                    "chat_id": self.cfg.telegram_chat_id,
-                    "text": "🔋 Battery Target Reached! Your charging device is ready."
-                }
-                r = requests.post(telegram_url, json=payload, proxies=proxies, timeout=5)
-                if r.status_code == 200:
-                    log.info("Telegram notification successfully routed.")
-                else:
-                    log.warning("Telegram API rejected transmission (Status Code: %d). It might be blocked regionally.", r.status_code)
-            except Exception as e:
-                log.error("Failed to transmit Telegram alert: %s", e)
-
-        if self.cfg.email_sender and self.cfg.email_receiver and self.cfg.email_password:
-            try:
-                msg = EmailMessage()
-                msg.set_content("🔋 Battery Target Reached! Your charging device is ready.")
-                msg["Subject"] = "Battery Music Notifier Alert"
-                msg["From"] = self.cfg.email_sender
-                msg["To"] = self.cfg.email_receiver
-                
-                with smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=5) as server:
-                    server.starttls()
-                    server.login(self.cfg.email_sender, self.cfg.email_password)
-                    server.send_message(msg)
-                    log.info("Email alert dispatched successfully.")
-            except Exception as e:
-                log.error("Failed to distribute Email alert: %s", e)
+                self._stop_event.set()
+                if self.player:
+                    self.player.stop()
 
 
-class RemoteMonitor:
-    """Runs inside Termux on your phone. Monitors local battery and pings the laptop."""
-    def __init__(self, cfg, host: str = "127.0.0.1", port: int = 8000):
-        self.cfg = cfg
-        self.host = host
-        self.port = port
-        self.battery = Battery()
-        self._was_playing = False
-
-    def _send_signal(self, command: str) -> bool:
+def discover_server_ip(timeout: float = 5.0) -> str | None:
+    """Listens for the UDP beacon broadcast from the laptop to auto-detect its IP address."""
+    print("🔍 Searching wireless network for your laptop... (Auto-Discovery Active)")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2.0)
-                s.connect((self.host, self.port))
-                s.sendall(command.encode('utf-8'))
-            return True
+            s.bind(("", DISCOVERY_UDP_PORT))
         except Exception as e:
-            log.warning("Could not reach laptop server on command %s: %s", command, e)
-            return False
+            log.debug("Failed to bind to UDP discovery port: %s", e)
+            return None
 
-    def run(self) -> None:
-        print(f"🔋 Client monitor running on phone. Telemetry targeted to {self.host}:{self.port}")
-        try:
-            while True:
-                info = self.battery.read()
-                in_target = (self.cfg.min_percentage <= info.percentage <= self.cfg.max_percentage)
+        s.settimeout(timeout)
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                data, addr = s.recvfrom(1024)
+                if data == BEACON_MESSAGE:
+                    detected_ip = addr[0]
+                    print(f"✅ Auto-detected laptop IP: {detected_ip}!")
+                    return detected_ip
+            except socket.timeout:
+                break
+            except Exception:
+                pass
+    print("⚠️ Auto-discovery timed out. No active laptop found on your Wi-Fi/Hotspot subnet.")
+    return None
 
-                if info.charging and in_target and not self._was_playing:
-                    if self._send_signal("START"):
-                        self._was_playing = True
-                elif (not info.charging or info.percentage < self.cfg.min_percentage) and self._was_playing:
-                    if self._send_signal("STOP"):
-                        self._was_playing = False
 
-                time.sleep(self.cfg.poll_interval)
-        except KeyboardInterrupt:
-            print("\nExiting phone monitor loop...")
-            self._send_signal("STOP")
+def send_notification(host: str, port: int, command: str) -> bool:
+    """Sends a control command (START/STOP) to the laptop server, with optional auto-discovery."""
+    target_host = host
+
+    # If the host is empty or set to "auto", invoke the wireless discovery helper
+    if not host or host.lower() == "auto":
+        discovered = discover_server_ip(timeout=4.0)
+        if discovered:
+            target_host = discovered
+        else:
+            # Fall back to localhost if discovery fails
+            target_host = "127.0.0.1"
+            print(f"🔄 Falling back to default host: {target_host}")
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(3.0)
+            s.connect((target_host, port))
+            s.sendall(command.encode('utf-8'))
+            return True
+    except Exception as e:
+        log.error("Failed to connect to notifier server at %s:%d: %s", target_host, port, e)
+        print(f"❌ Connection failed to {target_host}:{port}. Is the laptop server running?")
+        return False
