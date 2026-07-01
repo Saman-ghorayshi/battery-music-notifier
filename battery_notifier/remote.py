@@ -15,10 +15,10 @@ BEACON_MESSAGE = b"BATTERY_MUSIC_BEACON_V1"
 
 
 class RemoteMonitor:
-    def __init__(self, host: str, port: int, config):
+    def __init__(self, config, host: str, port: int):
+        self.cfg = config
         self.host = host
         self.port = port
-        self.cfg = config
         self._stop_event = threading.Event()
         
         # Import dynamically to prevent any chance of circular import chains
