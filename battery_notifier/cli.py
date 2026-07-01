@@ -29,7 +29,9 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1", help="Host address to bind to.")
     serve.add_argument("--port", type=int, default=8000, help="Port to listen on.")
     serve.add_argument("-v", "--verbose", action="store_true")
-
+        # ── ADD to serve and client subparsers ──
+    serve.add_argument("--config", type=Path)
+    client.add_argument("--config", type=Path)
     # 4. Add Client Subcommand
     client = sub.add_parser("client", help="Start the remote battery monitor (Run this on Phone).")
     client.add_argument("--host", default="127.0.0.1", help="Laptop socket connection address.")
@@ -40,7 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
-
+    # ── REPLACE the entire init block ──
     if args.cmd == "init":
         target = APP_DIR / "config.toml"
         if target.exists() and not args.force:
@@ -48,14 +50,13 @@ def main(argv=None) -> int:
             return 1
 
         print(" Welcome to the Battery Music Notifier setup!")
-        
-        # 1. Tkinter File Dialog for Music Selection with safe fallback
+
+        # Music file selection
         print("\n[Opening file dialog to select your music file...]")
         music_path = ""
         try:
             import tkinter as tk
             from tkinter import filedialog
-            
             root = tk.Tk()
             root.withdraw()
             root.attributes('-topmost', True)
@@ -77,24 +78,48 @@ def main(argv=None) -> int:
         max_pct = input("Enter maximum battery percentage [100]: ").strip() or "100"
         volume = input("Enter volume 0.0 to 1.0 [0.8]: ").strip() or "0.8"
 
+        # Proxy
         print("\n [Network Proxy Configuration Settings]")
         use_proxy = input("Do you need a proxy to bypass network blocks/Telegram restrictions? (y/N): ").strip().lower()
-        
         proxy_url = ""
         if use_proxy in ("y", "yes"):
             print("\nSelect your proxy core protocol:")
             print("  [1] SOCKS5 (Recommended for v2rayN: 10808, Hiddify: 12334, Nekoray: 2080)")
             print("  [2] HTTP   (Recommended for Clash: 7890, v2rayN HTTP: 10809)")
             ptype = input("Choose protocol option [1]: ").strip() or "1"
-            
             host = input("Enter proxy connection host IP [127.0.0.1]: ").strip() or "127.0.0.1"
             port = input("Enter proxy connection port number (e.g., 10808): ").strip()
             while not port.isdigit():
                 print(" Invalid entry. Port must be numerical.")
                 port = input("Enter proxy connection port number: ").strip()
-                
             proto = "http" if ptype == "2" else "socks5"
             proxy_url = f"{proto}://{host}:{port}"
+
+        # ── NEW: Telegram Setup ──
+        print("\n [Telegram Notification Setup]")
+        print("  Get token from @BotFather, chat ID from @userinfobot")
+        telegram_token = ""
+        telegram_chat_id = ""
+        tg_ans = input("Do you want Telegram notifications? (y/N): ").strip().lower()
+        if tg_ans in ("y", "yes"):
+            telegram_token = input("  Enter your Telegram Bot Token: ").strip()
+            telegram_chat_id = input("  Enter your Telegram Chat ID: ").strip()
+
+        # ── NEW: Email Setup ──
+        print("\n [Email Notification Setup]")
+        email_smtp_server = "smtp.gmail.com"
+        email_smtp_port = 587
+        email_sender = ""
+        email_password = ""
+        email_receiver = ""
+        em_ans = input("Do you want Email notifications? (y/N): ").strip().lower()
+        if em_ans in ("y", "yes"):
+            email_smtp_server = input("  Enter SMTP server [smtp.gmail.com]: ").strip() or "smtp.gmail.com"
+            port_in = input("  Enter SMTP port [587]: ").strip() or "587"
+            email_smtp_port = int(port_in) if port_in.isdigit() else 587
+            email_sender = input("  Enter sender email address: ").strip()
+            email_password = input("  Enter email password (or app password): ").strip()
+            email_receiver = input("  Enter receiver email address: ").strip()
 
         autostart_ans = input("\nDo you want to automatically start this app on boot? (y/N): ").strip().lower()
         enable_auto = autostart_ans in ("y", "yes")
@@ -111,14 +136,16 @@ annoying = false
 quiet_hours = [22, 8]
 proxy_url = "{proxy_url}"
 
-# Web integration fields (Optional)
-telegram_token = ""
-telegram_chat_id = ""
-email_smtp_server = "smtp.gmail.com"
-email_smtp_port = 587
-email_sender = ""
-email_password = ""
-email_receiver = ""
+# Telegram Integration
+telegram_token = "{telegram_token}"
+telegram_chat_id = "{telegram_chat_id}"
+
+# Email Integration
+email_smtp_server = "{email_smtp_server}"
+email_smtp_port = {email_smtp_port}
+email_sender = "{email_sender}"
+email_password = "{email_password}"
+email_receiver = "{email_receiver}"
 '''
         )
         print(f"\n Config successfully written to {target}")
@@ -129,7 +156,7 @@ email_receiver = ""
                 print(" Auto-start successfully enabled for your OS!")
             else:
                 print(" Failed to configure auto-start. Check logs for details.")
-                
+
         return 0
 
     cfg = Config.load(getattr(args, "config", None))
