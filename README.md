@@ -10,7 +10,7 @@ Designed with both local simplicity and complex client-server topologies in mind
 
 - **Symmetric Client-Server Topology** — Built with fully decoupled, polymorphic runtime endpoints. The application can run entirely on a single machine or split into distributed roles. For example, your Android device (inside Termux) can track local telemetry and trigger high-fidelity playback on your laptop across a local connection.
 
-- **Wireless Auto-Discovery (Zero-Config)** — Employs a lightweight, built-in UDP beacon broadcasting system. When running over a local Wi-Fi router or hotspot, the phone client automatically detects the laptop's IP address in real-time, eliminating the need to manually look up or configure static IP addresses.
+- **Wireless Auto-Discovery (Zero-Config)** — Employs a lightweight, built-in UDP beacon broadcasting system. When running over a local Wi-Fi router or hotspot, the phone client automatically detects the laptop's IP address in real-time on port 8002, eliminating the need to manually look up or configure static IP addresses.
 
 - **Non-Blocking Thread Isolation** — Webhooks (Telegram API, SMTP) execute inside isolated background daemon threads. Connection testing and retry logic are decoupled from the main socket listener, preventing system deadlocks during regional network blocks or internet blackouts.
 
@@ -120,7 +120,7 @@ On your **Laptop** — run the server listening on all incoming interfaces:
 battery-music serve --host 0.0.0.0 --port 8000
 ```
 
-On your **Phone** (inside Termux) — simply start the tracking client without a host IP parameter. It will automatically scan the network, find your laptop, and connect:
+On your **Phone** (inside Termux) — simply start the tracking client without a host IP parameter. It will automatically scan the network using the UDP beacon, find your laptop, and connect:
 
 ```bash
 battery-music client --port 8000

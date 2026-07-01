@@ -13,6 +13,86 @@ log = logging.getLogger(__name__)
 DISCOVERY_UDP_PORT = 8002
 BEACON_MESSAGE = b"BATTERY_MUSIC_BEACON_V1"
 
+
+class RemoteMonitor:
+    def __init__(self, host: str, port: int, config):
+        self.host = host
+        self.port = port
+        self.cfg = config
+        self._stop_event = threading.Event()
+        
+        # Import dynamically to prevent any chance of circular import chains
+        from .battery import Battery
+        self.battery = Battery()
+        self.resolved_host = None
+
+    def run(self) -> None:
+        print("📡 Remote Monitor Client active.")
+        print(f"🔋 Thresholds -> Min Alert: {self.cfg.min_percentage}%, Max Alert: {self.cfg.max_percentage}%")
+        print("Press Ctrl+C to terminate the monitoring loop.\n")
+        
+        is_playing = False
+        
+        # Step 1: Pre-resolve host once if we are using wireless Auto-Discovery
+        if not self.host or self.host.lower() == "auto":
+            self.resolved_host = discover_server_ip(timeout=4.0)
+            if self.resolved_host:
+                print(f"🎯 Auto-connected to discovered server at: {self.resolved_host}:{self.port}")
+            else:
+                self.resolved_host = "127.0.0.1"
+                print(f"🔄 No server discovered yet. Operating with local fallback: {self.resolved_host}:{self.port}")
+        else:
+            self.resolved_host = self.host
+            print(f"🎯 Target server manually set to: {self.resolved_host}:{self.port}")
+
+        # Step 2: Main client polling loop
+        while not self._stop_event.is_set():
+            try:
+                info = self.battery.read()
+                pct = info.percentage
+                charging = info.charging
+                
+                # Symmetrical detection conditions
+                should_alert = False
+                if charging and pct >= self.cfg.max_percentage:
+                    should_alert = True
+                elif not charging and pct <= self.cfg.min_percentage:
+                    should_alert = True
+                    
+                if should_alert:
+                    if not is_playing:
+                        print(f"🚨 Battery status alert: {pct}% (Charging: {charging}). Sending wake command...")
+                        
+                        # Trigger dynamic re-discovery if previous connection attempt was dropped
+                        if (not self.host or self.host.lower() == "auto") and not self.resolved_host:
+                            self.resolved_host = discover_server_ip(timeout=3.0) or "127.0.0.1"
+                        
+                        success = send_notification(self.resolved_host, self.port, "START")
+                        if success:
+                            is_playing = True
+                            print("✅ Alert successfully accepted by server.")
+                        else:
+                            print("⚠️ Server failed to respond. Resetting search credentials...")
+                            if not self.host or self.host.lower() == "auto":
+                                self.resolved_host = None  # Force rediscovery on next tick
+                else:
+                    if is_playing:
+                        print(f"💚 Battery status normalized: {pct}% (Charging: {charging}). Sending stop command...")
+                        success = send_notification(self.resolved_host, self.port, "STOP")
+                        if success:
+                            is_playing = False
+                            print("✅ Server successfully silenced.")
+                            
+            except KeyboardInterrupt:
+                print("\nShutting down monitor client...")
+                break
+            except Exception as e:
+                log.error("Error encountered in client tracking loop: %s", e)
+                print(f"⚠️ Local tracking exception: {e}")
+                
+            time.sleep(self.cfg.poll_interval)
+
+
 class NotificationServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 8000, config = None):
         self.host = host
@@ -27,10 +107,8 @@ class NotificationServer:
         log.info("Starting UDP discovery beacon broadcasts...")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            # Bind to an ephemeral port to send from, but target the broadcast address
             while not self._stop_event.is_set():
                 try:
-                    # Broadcast to the entire local subnet
                     s.sendto(BEACON_MESSAGE, ("255.255.255.255", DISCOVERY_UDP_PORT))
                 except Exception as e:
                     log.debug("UDP beacon broadcast failed: %s", e)
@@ -41,7 +119,7 @@ class NotificationServer:
         if not self.cfg:
             return
 
-        # 1. Telegram Dispatch Hook
+        # Telegram Dispatch Hook
         if self.cfg.telegram_token and self.cfg.telegram_chat_id:
             proxies = {"http": self.cfg.proxy_url, "https": self.cfg.proxy_url} if self.cfg.proxy_url else None
             try:
