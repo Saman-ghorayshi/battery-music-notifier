@@ -2,15 +2,25 @@
 
 An enterprise-grade, cross-platform distributed network telemetry application. This tool monitors system battery states and coordinates multi-threaded localized alerts, remote SMTP dispatches, and proxy-isolated Telegram webhooks.
 
-Designed with both local simplicity and complex client-server topologies in mind, it allows you to cross-manage device metrics (like your Android phone running Termux and your Windows/macOS/Linux laptop) seamlessly over local networks or offline USB tunnels.
+Designed with both local simplicity and complex client-server topologies in mind, it allows you to cross-manage device metrics (like your Android phone running Termux and your Windows/macOS/Linux laptop) seamlessly over local networks, wireless hotspots, or offline USB tunnels.
+
+---
 
 ## 🚀 Advanced Architectural Features
 
-- **Symmetric Client-Server Topology**: Built with fully decoupled, polymorphic runtime endpoints. The application can run entirely on a single machine or split into distributed roles. For example, your Android device (inside Termux) can track local telemetry and trigger high-fidelity playback on your laptop across an offline USB tunnel via ADB port proxy links.
-- **Non-Blocking Thread Isolation**: Webhooks (Telegram API, SMTP) execute inside isolated background daemon threads. Connection testing and retry logic are decoupled from the main socket listener, preventing system deadlocks during regional network blocks or internet blackouts.
-- **Heuristic Network Scanner (`doctor` utility)**: Features a low-level diagnostic suite that sweeps for open inbound port signatures of common desktop proxy cores (such as v2rayN, Hiddify, Clash, Nekoray, Sing-box, and Shadowsocks). It actively tests censorship firewall boundaries and advises on routing profiles.
-- **Intelligent Input Normalization**: Employs defensive string sanitization layers to auto-correct imprecise user inputs on the fly. Entries like `socks 10808`, `12334`, or `127.0.0.1:10809` are normalized into valid URI schemas (e.g., `socks5://127.0.0.1:10808`) automatically.
-- **Headless Android & Termux Resilience**: Includes dynamic audio fallback pipelines. If standard python desktop audio libraries (`sounddevice`) are missing on headless systems or mobile architectures, the engine gracefully falls back to native CLI audio players (like `termux-media-player`, `mpv`, or `ffplay`).
+- **Symmetric Client-Server Topology** — Built with fully decoupled, polymorphic runtime endpoints. The application can run entirely on a single machine or split into distributed roles. For example, your Android device (inside Termux) can track local telemetry and trigger high-fidelity playback on your laptop across a local connection.
+
+- **Non-Blocking Thread Isolation** — Webhooks (Telegram API, SMTP) execute inside isolated background daemon threads. Connection testing and retry logic are decoupled from the main socket listener, preventing system deadlocks during regional network blocks or internet blackouts.
+
+- **Heuristic Network Scanner (`doctor` utility)** — Features a low-level diagnostic suite that sweeps for open inbound port signatures of common desktop proxy cores (such as v2rayN, Hiddify, Clash, Nekoray, Sing-box, and Shadowsocks). It actively tests censorship firewall boundaries and advises on routing profiles.
+
+- **Intelligent Input Normalization** — Employs defensive string sanitization layers to auto-correct imprecise user inputs on the fly. Entries like `socks 10808`, `12334`, or `127.0.0.1:10809` are normalized into valid URI schemas (e.g., `socks5://127.0.0.1:10808`) automatically.
+
+- **Headless Android & Termux Resilience** — Includes dynamic audio fallback pipelines. If standard Python desktop audio libraries (`sounddevice`) are missing on headless systems or mobile architectures, the engine gracefully falls back to native CLI audio players (like `termux-media-player`, `mpv`, or `ffplay`).
+
+- **Automated USB Detection Bridge** — Employs dynamic system path lookup sweeps to locate local Android Debug Bridge (`adb`) tools on Windows, macOS, or Linux, automatically connecting, authorizing, and setting up proxy ports when a mobile device is plugged in over USB.
+
+---
 
 ## 🛠️ System Components
 
@@ -18,34 +28,40 @@ Designed with both local simplicity and complex client-server topologies in mind
 |---|---|
 | `battery.py` | Dynamic platform interfaces reading hardware metrics (`psutil`) and mobile terminals (`termux-battery-status`). |
 | `remote.py` | High-efficiency TCP socket abstraction handling inter-device commands, offline signals, and asynchronous alerting hooks. |
+| `adb_helper.py` | Automated background USB bridge search engine and port forwarding controller. |
 | `diagnostics.py` | Live validation suite running asset location scans, network telemetry evaluations, proxy sweeps, and censorship bypass checks. |
 | `player.py` | Threaded, volume-aware audio loop handling state-safe track interruptions and platform-specific terminal fallbacks. |
 | `autostart.py` | Cross-platform boot hook system utilizing VBS wrappers on Windows and XDG autostart schemas on Linux/macOS. |
 | `config.py` | Structured TOML parser featuring schema verification and heuristic parameter auto-correction. |
 | `cli.py` | Interactive step-by-step setup wizard and unified command-line entry point. |
 
+---
+
 ## 📦 Installation & Configuration
 
-### 1. Project Provisioning
+### 1. Automated Project Provisioning
 
-Clone your custom repository and install the module locally in editable mode along with development dependencies:
+Clone your repository and run the automated bootstrap script tailored to your operating system to safely map all pre-compiled dependencies and setup commands:
 
-For Linux, macOS, or Android Termux Users
+**🤖 For Linux, macOS, or Android Termux Users**
+
 ```bash
-git clone https://github.com/Saman-ghorayshi/battery-music-notifier.git
+git clone https://github.com/username/battery-music-notifier.git
 cd battery-music-notifier
 chmod +x install.sh
 ./install.sh
-pip install -e ".[dev]"
 ```
-For Windows Users (Command Prompt / PowerShell)
-```bash
-git clone https://github.com/Saman-ghorayshi/battery-music-notifier.git
+
+**💻 For Windows Users (Command Prompt / PowerShell)**
+
+```powershell
+git clone https://github.com/username/battery-music-notifier.git
 cd battery-music-notifier
 install.bat
-
-pip install -e ".[dev]"
 ```
+
+### 2. Guided Interactive Setup
+
 Launch the conversational setup wizard to select your notification track via a native file selector, configure battery thresholds, and set up automatic system startup properties:
 
 ```bash
@@ -60,6 +76,8 @@ Run a diagnostic check to verify telemetry, active local ports, connection paths
 battery-music doctor
 ```
 
+---
+
 ## 📡 Deployment Scenarios
 
 ### Scenario A: Standalone Execution (Local Device)
@@ -72,49 +90,83 @@ battery-music run
 
 ### Scenario B: Distributed Network (Offline USB Cable Tunnel)
 
-#### Setup 1: Phone Monitors ➔ Laptop Plays Sound
+**Setup 1: Phone Monitors ➔ Laptop Plays Sound**
 
-Ideal when your phone is charging on your desk or a USB port and you want your laptop's speakers to alert you:
+Ideal when your phone is charging on your desk or a USB port and you want your laptop's speakers to alert you.
 
-**On your Laptop:** Run the socket listener server:
+On your **Laptop** — run the socket listener server (which automatically attempts to establish an ADB reverse tunnel for you when the phone is plugged in):
 
 ```bash
 battery-music serve --port 8000
 ```
 
-**On your Laptop:** Establish an ADB reverse tunnel to route local phone signals up the USB charging cable:
-
-```bash
-adb reverse tcp:8000 tcp:8000
-```
-
-**On your Phone (inside Termux):** Start the tracking client:
+On your **Phone** (inside Termux) — start the tracking client targeting your local loopback address:
 
 ```bash
 battery-music client --host 127.0.0.1 --port 8000
 ```
 
-#### Setup 2: Laptop Monitors ➔ Phone Plays Sound (The Reverse!)
+**Setup 2: Laptop Monitors ➔ Phone Plays Sound (The Reverse!)**
 
-Ideal when your laptop is plugged in across the room and you want your phone in your pocket to ring:
+Ideal when your laptop is plugged in across the room and you want your phone in your pocket to ring.
 
-**On your Phone (inside Termux):** Run the socket listener server:
+On your **Phone** (inside Termux) — run the socket listener server:
 
 ```bash
 battery-music serve --port 8000
 ```
 
-**On your Laptop:** Establish an ADB forward tunnel to route outbound laptop signals down the USB charging cable:
+On your **Laptop** — establish an ADB forward tunnel to route outbound laptop signals down the USB charging cable:
 
 ```bash
 adb forward tcp:8000 tcp:8000
 ```
 
-**On your Laptop:** Start the tracking client:
+On your **Laptop** — start the tracking client targeting your local loopback address:
 
 ```bash
 battery-music client --host 127.0.0.1 --port 8000
 ```
+
+### Scenario C: Distributed Network (Wireless Wi-Fi / Hotspot)
+
+If your laptop is connected directly to your phone's Wi-Fi hotspot, or they are both connected to the same local Wi-Fi router, you can run the program completely cord-free!
+
+**Setup 1: Phone Monitors ➔ Laptop Plays Sound**
+
+Find your Laptop's local IP:
+- **Windows**: Run `ipconfig` (look for the IPv4 Address under your Wi-Fi Adapter, e.g., `192.168.43.15`).
+- **macOS/Linux**: Run `ifconfig` or `ip a`.
+
+On your **Laptop** — start the server listening on all available incoming network interfaces (`0.0.0.0`):
+
+```bash
+battery-music serve --host 0.0.0.0 --port 8000
+```
+
+On your **Phone** (inside Termux) — run the battery-monitoring client pointing directly to your laptop's local network IP:
+
+```bash
+battery-music client --host YOUR_LAPTOP_IP_HERE --port 8000
+```
+
+**Setup 2: Laptop Monitors ➔ Phone Plays Sound (The Reverse!)**
+
+Find your Phone's local IP: inside Termux, run `ip route`, or check your phone's Wi-Fi hotspot settings status page.
+
+On your **Phone** (inside Termux) — start the server listening on all network interfaces:
+
+```bash
+battery-music serve --host 0.0.0.0 --port 8000
+```
+
+On your **Laptop** — start the client monitoring your battery and pointing directly to your phone's network IP:
+
+```bash
+battery-music client --host YOUR_PHONE_IP_HERE --port 8000
+```
+
+---
 
 ## 🧪 Testing and Verification
 
@@ -125,6 +177,8 @@ Execute your test suite locally:
 ```bash
 pytest -v
 ```
+
+---
 
 ## 📝 License
 
