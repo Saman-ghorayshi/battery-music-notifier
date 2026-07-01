@@ -47,8 +47,8 @@ class RemoteMonitor:
             try:
                 url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
                 payload = {
-                    "chat_id": self.cfg.telegram_chat_id,
-                    "text": "🔋 Direct Mobile Alert: Phone battery threshold crossed!"
+                    "chat_id": self.cfg.telegram_chat_id, 
+                    "text": "START" # Send the actual command so the laptop reads it!
                 }
                 requests.post(url, json=payload, proxies=proxies, timeout=5)
                 print("📱 [Cloud Fallback] Telegram alert dispatched directly from device!")
@@ -149,6 +149,8 @@ class RemoteMonitor:
                 
             time.sleep(self.cfg.poll_interval)
 
+
+
 class NotificationServer:
     def __init__(self, config, host: str = "0.0.0.0", port: int = 8000):
         self.cfg = config
@@ -157,9 +159,9 @@ class NotificationServer:
         self.player = Player(config.music_files, config.volume, config.annoying) if config else None
         self._stop_event = threading.Event()
         self._beacon_thread = None
+        self._telegram_thread = None
 
     def _run_udp_beacon(self) -> None:
-        """Periodically broadcasts UDP packets so clients can auto-discover this laptop's IP."""
         log.info("Starting UDP discovery beacon broadcasts...")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -169,6 +171,34 @@ class NotificationServer:
                 except Exception as e:
                     log.debug("UDP beacon broadcast failed: %s", e)
                 time.sleep(2.0)
+
+    def _poll_telegram(self) -> None:
+        """Polls Telegram for commands (START/STOP) sent by the phone."""
+        log.info("Starting Telegram command polling...")
+        proxies = {"http": self.cfg.proxy_url, "https": self.cfg.proxy_url} if self.cfg.proxy_url else None
+        base_url = f"https://api.telegram.org/bot{self.cfg.telegram_token}"
+        offset = 0
+        
+        while not self._stop_event.is_set():
+            if not self.cfg.telegram_token:
+                time.sleep(5)
+                continue
+                
+            try:
+                r = requests.get(f"{base_url}/getUpdates", params={"timeout": 3, "offset": offset}, proxies=proxies, timeout=5)
+                if r.status_code == 200:
+                    for update in r.json().get("result", []):
+                        offset = update["update_id"] + 1
+                        text = update.get("message", {}).get("text", "").upper().strip()
+                        if "START" in text:
+                            log.info("Received Telegram command: START")
+                            if self.player: self.player.play()
+                            threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
+                        elif "STOP" in text:
+                            log.info("Received Telegram command: STOP")
+                            if self.player: self.player.stop()
+            except Exception:
+                pass # Ignore timeouts, loop will continue
     def _dispatch_web_alerts(self) -> None:
         """Asynchronously triggers external web hooks (Telegram, SMTP) in a separate thread."""
         if not self.cfg:
@@ -207,14 +237,20 @@ class NotificationServer:
                 log.info("Email notification sent successfully.")
             except Exception as e:
                 log.error("Failed to dispatch Email notification: %s", e)
+
+                
     def run(self) -> None:
-        # Automatically set up the USB ADB bridge if a device is connected
         print("🔗 Initializing automatic USB ADB Bridge check...")
         auto_setup_usb_bridge(mode="reverse", port=self.port, max_retries=3)
 
-        # Start the UDP Auto-Discovery Beacon thread
         self._beacon_thread = threading.Thread(target=self._run_udp_beacon, daemon=True)
         self._beacon_thread.start()
+
+        # Start the Telegram polling thread (Cloud Fallback for restricted networks)
+        if self.cfg.telegram_token:
+            print("📨 Telegram Cloud Command polling active! (Phone can send START/STOP via Telegram)")
+            self._telegram_thread = threading.Thread(target=self._poll_telegram, daemon=True)
+            self._telegram_thread.start()
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -229,7 +265,6 @@ class NotificationServer:
             
             print(f"\n📡 Server listening on {self.host}:{self.port}... (Always Open)")
             print("✨ Wireless auto-discovery is active! Phones can connect automatically.")
-            log.info("Remote socket server initialization successful.")
 
             try:
                 while not self._stop_event.is_set():
@@ -241,24 +276,16 @@ class NotificationServer:
                     with conn:
                         data = conn.recv(1024).decode('utf-8').strip()
                         if data == "START":
-                            log.info("Received remote command: START")
-                            if self.player:
-                                self.player.play()
-                            # Run web alerts in the background thread
+                            if self.player: self.player.play()
                             threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
-                            
                         elif data == "STOP":
-                            log.info("Received remote command: STOP")
-                            if self.player:
-                                self.player.stop()
+                            if self.player: self.player.stop()
             except KeyboardInterrupt:
                 print("\nShutting down server safely...")
             finally:
                 self._stop_event.set()
                 if self.player:
                     self.player.stop()
-
-
 def discover_server_ip(timeout: float = 5.0) -> str | None:
     """Listens for the UDP beacon broadcast from the laptop to auto-detect its IP address."""
     print("🔍 Searching wireless network for your laptop... (Auto-Discovery Active)")

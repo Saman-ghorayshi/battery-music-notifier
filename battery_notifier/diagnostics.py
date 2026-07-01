@@ -28,6 +28,12 @@ def run_doctor(cfg) -> bool:
         b = Battery()
         info = b.read()
         print(f"   Telemetry Online (Current Battery: {info.percentage}%, Charging: {info.charging})")
+        
+        # Termux specific warning
+        import shutil
+        if shutil.which("termux-battery-status"):
+            print("   ⚠️ ANDROID TERMUX DETECTED: You MUST run 'termux-wake-lock' before starting the client,")
+            print("      otherwise Android will kill the app when your screen turns off!")
     except Exception as err:
         print(f"  {err}")
         all_clear = False
