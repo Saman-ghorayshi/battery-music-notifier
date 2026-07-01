@@ -10,6 +10,7 @@ import smtplib
 from email.message import EmailMessage
 from .player import Player
 from .battery import Battery
+from .adb_helper import auto_setup_usb_bridge
 
 log = logging.getLogger(__name__)
 
@@ -23,13 +24,16 @@ class NotificationServer:
         self._stop_event = threading.Event()
 
     def run(self) -> None:
+        print(" Initializing automatic USB ADB Bridge...")
+        auto_setup_usb_bridge(mode="reverse", port=self.port, max_retries=10)
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((self.host, self.port))
             s.listen()
             s.settimeout(1.0)
             
-            print(f"📡 Server listening on {self.host}:{self.port}... (Always Open)")
+            print(f"\n📡 Server listening on {self.host}:{self.port}... (Always Open)")
             log.info("Remote socket server initialization successful.")
 
             try:
@@ -45,7 +49,7 @@ class NotificationServer:
                             log.info("Received remote command: START")
                             self.player.play()
                             
-                            # lets add this Thread Isolation: Run web alerts in the background :)
+                            # Thread Isolation: Run web alerts in the background
                             threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
                             
                         elif data == "STOP":
