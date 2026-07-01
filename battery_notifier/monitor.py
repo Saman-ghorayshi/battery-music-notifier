@@ -11,7 +11,7 @@ class Monitor:
         self.cfg = cfg
         self.battery = Battery()
         self.player = Player(cfg.music_files, cfg.volume, cfg.annoying)
-        self.notifier = Notifier()
+        self.notifier = Notifier(cfg)   # ← was Notifier() with no cfg
     def run(self) -> None:
         log.info("Monitoring started.")
         try:
