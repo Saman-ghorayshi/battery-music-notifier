@@ -21,7 +21,7 @@ class RemoteMonitor:
         self.port = port
         self._stop_event = threading.Event()
         
-        # Import dynamically to prevent any chance of circular import chains
+        # Import dynamically to prevent circular import chains
         from .battery import Battery
         self.battery = Battery()
         self.resolved_host = None
@@ -94,10 +94,10 @@ class RemoteMonitor:
 
 
 class NotificationServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 8000, config = None):
+    def __init__(self, config, host: str = "0.0.0.0", port: int = 8000):
+        self.cfg = config
         self.host = host
         self.port = port
-        self.cfg = config
         self.player = Player(config.music_files, config.volume, config.annoying) if config else None
         self._stop_event = threading.Event()
         self._beacon_thread = None
