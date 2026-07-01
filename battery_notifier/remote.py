@@ -34,51 +34,24 @@ class RemoteMonitor:
             return True
         except requests.RequestException:
             return False
-
     def _dispatch_client_web_alerts(self) -> None:
-        """Dispatches cloud alerts directly from the mobile client when local networks are isolated by a VPN."""
+        """Dispatches cloud alerts directly from the mobile client when local networks are isolated."""
         if not self.cfg:
             return
 
         proxies = {"http": self.cfg.proxy_url, "https": self.cfg.proxy_url} if self.cfg.proxy_url else None
 
-        # --- Telegram ---
+        # --- Telegram (Using setMyDescription so the laptop can read it) ---
         if self.cfg.telegram_token and self.cfg.telegram_chat_id:
             try:
-                url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
-                payload = {
-                    "chat_id": self.cfg.telegram_chat_id, 
-                    "text": "START" # Send the actual command so the laptop reads it!
-                }
+                url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/setMyDescription"
+                payload = {"description": "START"}
                 requests.post(url, json=payload, proxies=proxies, timeout=5)
-                print("📱 [Cloud Fallback] Telegram alert dispatched directly from device!")
+                print("📱 [Cloud Fallback] Telegram command dispatched via Bot Description!")
                 log.info("Client fallback Telegram notification sent successfully.")
             except Exception as e:
                 log.error("Failed to dispatch client fallback Telegram notification: %s", e)
-                print(" [Cloud Fallback] Telegram dispatch failed.")
-        # --- Email ---
-        if self.cfg.email_sender and self.cfg.email_password and self.cfg.email_receiver:
-            try:
-                import smtplib
-                from email.mime.text import MIMEText
-                msg = MIMEText("🔋 Direct Mobile Alert: Phone battery threshold crossed!")
-                msg["Subject"] = "Battery Music Notifier Alert"
-                msg["From"] = self.cfg.email_sender
-                msg["To"] = self.cfg.email_receiver
-                
-                if self.cfg.email_smtp_port == 465:
-                    server = smtplib.SMTP_SSL(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
-                else:
-                    server = smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
-                    server.starttls()
-                    
-                server.login(self.cfg.email_sender, self.cfg.email_password)
-                server.send_message(msg)
-                print("📱 [Cloud Fallback] Email alert dispatched directly from device!")
-                log.info("Client fallback Email notification sent successfully.")
-            except Exception as e:
-                log.error("Failed to dispatch client fallback Email notification: %s", e)
-                print(" [Cloud Fallback] Email dispatch failed.")
+                print("❌ [Cloud Fallback] Telegram dispatch failed.")
     def run(self) -> None:
         print("📡 Remote Monitor Client active.")
         print(f"🔋 Thresholds -> Min Alert: {self.cfg.min_percentage}%, Max Alert: {self.cfg.max_percentage}%")
@@ -171,13 +144,12 @@ class NotificationServer:
                 except Exception as e:
                     log.debug("UDP beacon broadcast failed: %s", e)
                 time.sleep(2.0)
-
     def _poll_telegram(self) -> None:
-        """Polls Telegram for commands (START/STOP) sent by the phone."""
+        """Polls Telegram Bot Description for commands (START/STOP) sent by the phone."""
         log.info("Starting Telegram command polling...")
         proxies = {"http": self.cfg.proxy_url, "https": self.cfg.proxy_url} if self.cfg.proxy_url else None
         base_url = f"https://api.telegram.org/bot{self.cfg.telegram_token}"
-        offset = 0
+        last_cmd = ""
         
         while not self._stop_event.is_set():
             if not self.cfg.telegram_token:
@@ -185,20 +157,22 @@ class NotificationServer:
                 continue
                 
             try:
-                r = requests.get(f"{base_url}/getUpdates", params={"timeout": 3, "offset": offset}, proxies=proxies, timeout=5)
+                r = requests.get(f"{base_url}/getMyDescription", proxies=proxies, timeout=5)
                 if r.status_code == 200:
-                    for update in r.json().get("result", []):
-                        offset = update["update_id"] + 1
-                        text = update.get("message", {}).get("text", "").upper().strip()
-                        if "START" in text:
+                    desc = r.json().get("result", {}).get("description", "").upper().strip()
+                    
+                    if desc != last_cmd:
+                        if "START" in desc:
                             log.info("Received Telegram command: START")
                             if self.player: self.player.play()
                             threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
-                        elif "STOP" in text:
+                        elif "STOP" in desc:
                             log.info("Received Telegram command: STOP")
                             if self.player: self.player.stop()
+                        last_cmd = desc
             except Exception:
-                pass # Ignore timeouts, loop will continue
+                pass # Ignore timeouts
+            time.sleep(2) # Check every 2 seconds
     def _dispatch_web_alerts(self) -> None:
         """Asynchronously triggers external web hooks (Telegram, SMTP) in a separate thread."""
         if not self.cfg:
