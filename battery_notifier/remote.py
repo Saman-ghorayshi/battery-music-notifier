@@ -55,8 +55,7 @@ class RemoteMonitor:
                 log.info("Client fallback Telegram notification sent successfully.")
             except Exception as e:
                 log.error("Failed to dispatch client fallback Telegram notification: %s", e)
-                print("❌ [Cloud Fallback] Telegram dispatch failed.")
-
+                print(" [Cloud Fallback] Telegram dispatch failed.")
         # --- Email ---
         if self.cfg.email_sender and self.cfg.email_password and self.cfg.email_receiver:
             try:
@@ -66,16 +65,20 @@ class RemoteMonitor:
                 msg["Subject"] = "Battery Music Notifier Alert"
                 msg["From"] = self.cfg.email_sender
                 msg["To"] = self.cfg.email_receiver
-                with smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10) as server:
+                
+                if self.cfg.email_smtp_port == 465:
+                    server = smtplib.SMTP_SSL(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
+                else:
+                    server = smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
                     server.starttls()
-                    server.login(self.cfg.email_sender, self.cfg.email_password)
-                    server.send_message(msg)
+                    
+                server.login(self.cfg.email_sender, self.cfg.email_password)
+                server.send_message(msg)
                 print("📱 [Cloud Fallback] Email alert dispatched directly from device!")
                 log.info("Client fallback Email notification sent successfully.")
             except Exception as e:
                 log.error("Failed to dispatch client fallback Email notification: %s", e)
-                print("❌ [Cloud Fallback] Email dispatch failed.")
-
+                print(" [Cloud Fallback] Email dispatch failed.")
     def run(self) -> None:
         print("📡 Remote Monitor Client active.")
         print(f"🔋 Thresholds -> Min Alert: {self.cfg.min_percentage}%, Max Alert: {self.cfg.max_percentage}%")
@@ -83,7 +86,6 @@ class RemoteMonitor:
         
         is_playing = False
         
-        # Pre-resolve host once if using wireless Auto-Discovery
         if not self.host or self.host.lower() == "auto":
             self.resolved_host = discover_server_ip(timeout=4.0)
             if self.resolved_host:
@@ -95,59 +97,46 @@ class RemoteMonitor:
             self.resolved_host = self.host
             print(f"🎯 Target server manually set to: {self.resolved_host}:{self.port}")
 
-        # Main client polling loop
         while not self._stop_event.is_set():
             try:
                 info = self.battery.read()
                 pct = info.percentage
                 charging = info.charging
                 
-                # Symmetrical detection conditions
-                should_alert = False
-                if charging and pct >= self.cfg.max_percentage:
-                    should_alert = True
-                elif not charging and pct <= self.cfg.min_percentage:
-                    should_alert = True
+                in_target = (self.cfg.min_percentage <= pct <= self.cfg.max_percentage)
+                
+                # If charging and in target, trigger START
+                if charging and in_target and not is_playing:
+                    print(f"🚨 Battery status alert: {pct}% (Charging: {charging}). Trying local network push...")
                     
-                if should_alert:
-                    if not is_playing:
-                        print(f"🚨 Battery status alert: {pct}% (Charging: {charging}). Trying local network push...")
-                        
-                        # Trigger dynamic re-discovery if previous connection attempt was dropped
-                        if (not self.host or self.host.lower() == "auto") and not self.resolved_host:
-                            self.resolved_host = discover_server_ip(timeout=3.0) or "127.0.0.1"
-                        
-                        # 1. Attempt Primary Local Alert (Laptop Server)
-                        success = send_notification(self.resolved_host, self.port, "START")
-                        if success:
+                    if (not self.host or self.host.lower() == "auto") and not self.resolved_host:
+                        self.resolved_host = discover_server_ip(timeout=3.0) or "127.0.0.1"
+                    
+                    success = send_notification(self.resolved_host, self.port, "START")
+                    if success:
+                        is_playing = True
+                        print("✅ Local Alert successfully accepted by laptop server.")
+                    else:
+                        print("⚠️ Local laptop unreachable. Checking internet channels...")
+                        if self._has_internet():
+                            print("🌐 Internet is active! Routing alerts through Cloud hooks instead...")
+                            self._dispatch_client_web_alerts()
                             is_playing = True
-                            print("✅ Local Alert successfully accepted by laptop server.")
                         else:
-                            print("⚠️ Local laptop unreachable (likely due to phone VPN / isolated network). Checking internet channels...")
+                            print(" Critical: Both Local Network and Cloud Internet connections are offline.")
+                            if not self.host or self.host.lower() == "auto":
+                                self.resolved_host = None
                             
-                            # 2. Secondary Internet Fallback
-                            if self._has_internet():
-                                print("🌐 Internet is active! Routing alerts through Cloud hooks instead...")
-                                self._dispatch_client_web_alerts()
-                                is_playing = True
-                            else:
-                                print("❌ Critical: Both Local Network and Cloud Internet connections are offline.")
-                                if not self.host or self.host.lower() == "auto":
-                                    self.resolved_host = None  # Force local re-discovery on next pass
-                else:
-                    if is_playing:
-                        print(f"💚 Battery status normalized: {pct}% (Charging: {charging}). Sending stop command...")
+                # If unplugged or drops below min, trigger STOP
+                elif (not charging or pct < self.cfg.min_percentage) and is_playing:
+                    print(f"💚 Battery status normalized: {pct}% (Charging: {charging}). Sending stop command...")
+                    success = send_notification(self.resolved_host, self.port, "STOP")
+                    is_playing = False  # Always reset state to allow future alerts
+                    if success:
+                        print("✅ Laptop server successfully silenced.")
+                    else:
+                        print("📱 Local server offline for STOP command. Client status tracker reset.")
                         
-                        # Symmetrical Stop Dispatch
-                        success = send_notification(self.resolved_host, self.port, "STOP")
-                        if success:
-                            is_playing = False
-                            print("✅ Laptop server successfully silenced.")
-                        else:
-                            # If local path is down, just reset client tracking state silently
-                            is_playing = False
-                            print("📱 Local server offline for STOP command. Client status tracker reset.")
-                            
             except KeyboardInterrupt:
                 print("\nShutting down monitor client...")
                 break
@@ -178,7 +167,7 @@ class NotificationServer:
                 except Exception as e:
                     log.debug("UDP beacon broadcast failed: %s", e)
                 time.sleep(2.0)
-        def _dispatch_web_alerts(self) -> None:
+    def _dispatch_web_alerts(self) -> None:
         """Asynchronously triggers external web hooks (Telegram, SMTP) in a separate thread."""
         if not self.cfg:
             return
@@ -204,10 +193,15 @@ class NotificationServer:
                 msg["Subject"] = "Battery Music Notifier Alert"
                 msg["From"] = self.cfg.email_sender
                 msg["To"] = self.cfg.email_receiver
-                with smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10) as server:
+                
+                if self.cfg.email_smtp_port == 465:
+                    server = smtplib.SMTP_SSL(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
+                else:
+                    server = smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
                     server.starttls()
-                    server.login(self.cfg.email_sender, self.cfg.email_password)
-                    server.send_message(msg)
+                    
+                server.login(self.cfg.email_sender, self.cfg.email_password)
+                server.send_message(msg)
                 log.info("Email notification sent successfully.")
             except Exception as e:
                 log.error("Failed to dispatch Email notification: %s", e)

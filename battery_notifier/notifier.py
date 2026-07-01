@@ -56,19 +56,26 @@ class Notifier:
             log.info("Telegram notification sent.")
         except Exception as e:
             log.warning("Telegram notification failed: %s", e)
-
     def _send_email(self, title: str, message: str) -> None:
         if not self.cfg or not self.cfg.email_sender or not self.cfg.email_password or not self.cfg.email_receiver:
             return
         try:
+            import smtplib
+            from email.mime.text import MIMEText
             msg = MIMEText(f"{title}: {message}")
             msg["Subject"] = title
             msg["From"] = self.cfg.email_sender
             msg["To"] = self.cfg.email_receiver
-            with smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10) as server:
+            
+            # Fix: Auto-detect SSL (465) vs TLS (587)
+            if self.cfg.email_smtp_port == 465:
+                server = smtplib.SMTP_SSL(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
+            else:
+                server = smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
                 server.starttls()
-                server.login(self.cfg.email_sender, self.cfg.email_password)
-                server.send_message(msg)
+                
+            server.login(self.cfg.email_sender, self.cfg.email_password)
+            server.send_message(msg)
             log.info("Email notification sent.")
         except Exception as e:
             log.warning("Email notification failed: %s", e)

@@ -32,12 +32,13 @@ def _build_parser() -> argparse.ArgumentParser:
         # ── ADD to serve and client subparsers ──
     serve.add_argument("--config", type=Path)
     client.add_argument("--config", type=Path)
-    # 4. Add Client Subcommand
+    
+        # 4. Add Client Subcommand
     client = sub.add_parser("client", help="Start the remote battery monitor (Run this on Phone).")
-    client.add_argument("--host", default="127.0.0.1", help="Laptop socket connection address.")
+    client.add_argument("--host", default="auto", help="Laptop socket connection address (use 'auto' for Wi-Fi discovery).")
     client.add_argument("--port", type=int, default=8000, help="Laptop socket communication port.")
     client.add_argument("-v", "--verbose", action="store_true")
-    
+    client.add_argument("--config", type=Path)
     return p
 
 def main(argv=None) -> int:
@@ -50,8 +51,7 @@ def main(argv=None) -> int:
             return 1
 
         print(" Welcome to the Battery Music Notifier setup!")
-
-        # Music file selection
+        
         print("\n[Opening file dialog to select your music file...]")
         music_path = ""
         try:
@@ -77,8 +77,15 @@ def main(argv=None) -> int:
         min_pct = input("Enter minimum battery percentage to trigger [99]: ").strip() or "99"
         max_pct = input("Enter maximum battery percentage [100]: ").strip() or "100"
         volume = input("Enter volume 0.0 to 1.0 [0.8]: ").strip() or "0.8"
+        
+        poll = input("Enter poll interval in seconds [3.0]: ").strip() or "3.0"
+        annoying_ans = input("Loop music annoyingly until unplugged? (y/N): ").strip().lower()
+        annoying = "true" if annoying_ans in ("y", "yes") else "false"
+        
+        print("\n [Quiet Hours (Do Not Disturb)]")
+        quiet_start = input("Enter quiet hours start (24h format, e.g., 22) [22]: ").strip() or "22"
+        quiet_end = input("Enter quiet hours end (24h format, e.g., 8) [8]: ").strip() or "8"
 
-        # Proxy
         print("\n [Network Proxy Configuration Settings]")
         use_proxy = input("Do you need a proxy to bypass network blocks/Telegram restrictions? (y/N): ").strip().lower()
         proxy_url = ""
@@ -95,7 +102,6 @@ def main(argv=None) -> int:
             proto = "http" if ptype == "2" else "socks5"
             proxy_url = f"{proto}://{host}:{port}"
 
-        # ── NEW: Telegram Setup ──
         print("\n [Telegram Notification Setup]")
         print("  Get token from @BotFather, chat ID from @userinfobot")
         telegram_token = ""
@@ -105,7 +111,6 @@ def main(argv=None) -> int:
             telegram_token = input("  Enter your Telegram Bot Token: ").strip()
             telegram_chat_id = input("  Enter your Telegram Chat ID: ").strip()
 
-        # ── NEW: Email Setup ──
         print("\n [Email Notification Setup]")
         email_smtp_server = "smtp.gmail.com"
         email_smtp_port = 587
@@ -115,7 +120,7 @@ def main(argv=None) -> int:
         em_ans = input("Do you want Email notifications? (y/N): ").strip().lower()
         if em_ans in ("y", "yes"):
             email_smtp_server = input("  Enter SMTP server [smtp.gmail.com]: ").strip() or "smtp.gmail.com"
-            port_in = input("  Enter SMTP port [587]: ").strip() or "587"
+            port_in = input("  Enter SMTP port (587 for TLS, 465 for SSL) [587]: ").strip() or "587"
             email_smtp_port = int(port_in) if port_in.isdigit() else 587
             email_sender = input("  Enter sender email address: ").strip()
             email_password = input("  Enter email password (or app password): ").strip()
@@ -131,9 +136,9 @@ music_files = ["{music_path}"]
 min_percentage = {min_pct}
 max_percentage = {max_pct}
 volume = {volume}
-poll_interval = 3.0
-annoying = false
-quiet_hours = [22, 8]
+poll_interval = {float(poll)}
+annoying = {annoying}
+quiet_hours = [{int(quiet_start)}, {int(quiet_end)}]
 proxy_url = "{proxy_url}"
 
 # Telegram Integration
@@ -156,9 +161,8 @@ email_receiver = "{email_receiver}"
                 print(" Auto-start successfully enabled for your OS!")
             else:
                 print(" Failed to configure auto-start. Check logs for details.")
-
+                
         return 0
-
     cfg = Config.load(getattr(args, "config", None))
 
     if args.cmd == "battery":
