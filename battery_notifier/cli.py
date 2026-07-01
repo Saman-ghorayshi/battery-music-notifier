@@ -4,7 +4,6 @@ from pathlib import Path
 from .config import Config, APP_DIR
 from .logs import setup_logging
 from .monitor import Monitor
-
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="battery-music", description="Play music when battery reaches target.")
     p.add_argument("-V", "--version", action="version", version="%(prog)s 1.0.0")
@@ -24,23 +23,22 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="Scan local machine configurations and system hooks for conflicts.")
     init = sub.add_parser("init", help="Run setup wizard and write config file.")
     init.add_argument("--force", action="store_true")
+    
     # 3. Add Server Subcommand
     serve = sub.add_parser("serve", help="Start the offline music server (Run this on Laptop).")
     serve.add_argument("--host", default="127.0.0.1", help="Host address to bind to.")
     serve.add_argument("--port", type=int, default=8000, help="Port to listen on.")
     serve.add_argument("-v", "--verbose", action="store_true")
-        # ── ADD to serve and client subparsers ──
     serve.add_argument("--config", type=Path)
-    client.add_argument("--config", type=Path)
-    
-        # 4. Add Client Subcommand
+
+    # 4. Add Client Subcommand
     client = sub.add_parser("client", help="Start the remote battery monitor (Run this on Phone).")
     client.add_argument("--host", default="auto", help="Laptop socket connection address (use 'auto' for Wi-Fi discovery).")
     client.add_argument("--port", type=int, default=8000, help="Laptop socket communication port.")
     client.add_argument("-v", "--verbose", action="store_true")
     client.add_argument("--config", type=Path)
+    
     return p
-
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     # ── REPLACE the entire init block ──

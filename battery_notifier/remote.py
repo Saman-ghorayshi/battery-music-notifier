@@ -103,40 +103,43 @@ class RemoteMonitor:
                 pct = info.percentage
                 charging = info.charging
                 
-                in_target = (self.cfg.min_percentage <= pct <= self.cfg.max_percentage)
-                
-                # If charging and in target, trigger START
-                if charging and in_target and not is_playing:
-                    print(f"🚨 Battery status alert: {pct}% (Charging: {charging}). Trying local network push...")
+                should_alert = False
+                if charging and pct >= self.cfg.max_percentage:
+                    should_alert = True
+                elif not charging and pct <= self.cfg.min_percentage:
+                    should_alert = True
                     
-                    if (not self.host or self.host.lower() == "auto") and not self.resolved_host:
-                        self.resolved_host = discover_server_ip(timeout=3.0) or "127.0.0.1"
-                    
-                    success = send_notification(self.resolved_host, self.port, "START")
-                    if success:
-                        is_playing = True
-                        print("✅ Local Alert successfully accepted by laptop server.")
-                    else:
-                        print("⚠️ Local laptop unreachable. Checking internet channels...")
-                        if self._has_internet():
-                            print("🌐 Internet is active! Routing alerts through Cloud hooks instead...")
-                            self._dispatch_client_web_alerts()
-                            is_playing = True
-                        else:
-                            print(" Critical: Both Local Network and Cloud Internet connections are offline.")
-                            if not self.host or self.host.lower() == "auto":
-                                self.resolved_host = None
-                            
-                # If unplugged or drops below min, trigger STOP
-                elif (not charging or pct < self.cfg.min_percentage) and is_playing:
-                    print(f"💚 Battery status normalized: {pct}% (Charging: {charging}). Sending stop command...")
-                    success = send_notification(self.resolved_host, self.port, "STOP")
-                    is_playing = False  # Always reset state to allow future alerts
-                    if success:
-                        print("✅ Laptop server successfully silenced.")
-                    else:
-                        print("📱 Local server offline for STOP command. Client status tracker reset.")
+                if should_alert:
+                    if not is_playing:
+                        print(f"🚨 Battery status alert: {pct}% (Charging: {charging}). Trying local network push...")
                         
+                        if (not self.host or self.host.lower() == "auto") and not self.resolved_host:
+                            self.resolved_host = discover_server_ip(timeout=3.0) or "127.0.0.1"
+                        
+                        success = send_notification(self.resolved_host, self.port, "START")
+                        if success:
+                            is_playing = True
+                            print("✅ Local Alert successfully accepted by laptop server.")
+                        else:
+                            print("⚠️ Local laptop unreachable. Checking internet channels...")
+                            if self._has_internet():
+                                print("🌐 Internet is active! Routing alerts through Cloud hooks instead...")
+                                self._dispatch_client_web_alerts()
+                                is_playing = True
+                            else:
+                                print("❌ Critical: Both Local Network and Cloud Internet connections are offline.")
+                                if not self.host or self.host.lower() == "auto":
+                                    self.resolved_host = None
+                else:
+                    if is_playing:
+                        print(f"💚 Battery status normalized: {pct}% (Charging: {charging}). Sending stop command...")
+                        success = send_notification(self.resolved_host, self.port, "STOP")
+                        is_playing = False  # Always reset state to allow future alerts
+                        if success:
+                            print("✅ Laptop server successfully silenced.")
+                        else:
+                            print("📱 Local server offline for STOP command. Client status tracker reset.")
+                            
             except KeyboardInterrupt:
                 print("\nShutting down monitor client...")
                 break
@@ -145,7 +148,6 @@ class RemoteMonitor:
                 print(f"⚠️ Local tracking exception: {e}")
                 
             time.sleep(self.cfg.poll_interval)
-
 
 class NotificationServer:
     def __init__(self, config, host: str = "0.0.0.0", port: int = 8000):
