@@ -1,0 +1,14 @@
+name = "battery-relay-self-hosted"
+version = "1.0.0"
+main = "../worker.js"
+compatibility_date = "2024-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "battery-relay-db-private"
+database_id = "YOUR_D1_DATABASE_ID"
+
+[vars]
+ADMIN_KEY = "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+# Self-hosted: rate limiting disabled (private use, limited users)
+RATE_LIMIT_ENABLED = "false"

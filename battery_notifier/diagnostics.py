@@ -137,7 +137,7 @@ def run_doctor(cfg) -> bool:
             print("     FIX: Configure a proxy or run a local proxy client (v2rayN, Hiddify, etc.)")
         all_clear = False
 
-    # -- 7. Server Reachability --
+    # ── Server Reachability ──
     print("\n [7] Server Reachability")
     cached = load_cached_host()
     test_hosts = []
@@ -156,7 +156,37 @@ def run_doctor(cfg) -> bool:
             print(f"   {label} ({host}:8000): no response")
 
     if not server_found:
-        print("   No server detected. Run `battery-music serve` on the laptop first.")
+        print("   No local server detected. Run `battery-music serve` on the laptop first.")
+
+    # ── Worker Relay ──
+    print("\n [8] Worker Relay")
+    if cfg.worker_url:
+        print(f"   URL:    {cfg.worker_url}")
+        print(f"   Token:  {cfg.worker_token[:8] + '...' if cfg.worker_token else 'not set'}")
+        print(f"   Admin:  {'configured' if cfg.admin_key else 'not set'}")
+        # Quick connectivity test
+        try:
+            import requests as _req
+            r = _req.get(f"{cfg.worker_url}/health",
+                         proxies={"http": effective_proxy, "https": effective_proxy} if effective_proxy else None,
+                         timeout=5)
+            if r.status_code == 200:
+                print(f"   Health: reachable (HTTP {r.status_code})")
+            else:
+                print(f"   Health: unexpected status {r.status_code}")
+        except Exception:
+            print("   Health: UNREACHABLE (check URL or proxy)")
+    else:
+        print("   Not configured (local-only mode)")
+
+    # ── Thief Catcher ──
+    print("\n [9] Thief Catcher")
+    if cfg.alarm_files:
+        print(f"   Alarm sound: {cfg.alarm_files[0]}")
+    else:
+        print("   Alarm sound: not set (will use music file)")
+    print("   Arm command: battery-music arm --mode both")
+    print("   Relay listen: battery-music relay")
 
     # -- Summary --
     print("\n" + "=" * 55)

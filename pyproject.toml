@@ -38,3 +38,6 @@ battery-music = "battery_notifier.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["battery_notifier*"]
+
+[tool.setuptools.package-data]
+battery_notifier = ["assets/*.wav"]

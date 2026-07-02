@@ -9,6 +9,12 @@ import logging
 log = logging.getLogger(__name__)
 APP_DIR = Path(os.environ.get("BATTERY_NOTIFIER_HOME", Path.home() / ".config" / "battery-music-notifier"))
 
+# Default hosted worker URL (users can override or self-host)
+DEFAULT_WORKER_URL = "https://battery-relay.your-worker.workers.dev"
+
+# Bundled default alarm sound
+DEFAULT_ALARM_FILE = str(Path(__file__).parent / "assets" / "default_alarm.wav")
+
 def sanitize_proxy_url(url: str) -> str:
     """Intelligently repairs common malformed proxy strings from end-users."""
     url = url.strip()
@@ -53,7 +59,7 @@ def sanitize_proxy_url(url: str) -> str:
 @dataclass
 class Config:
     music_files: List[str] = field(default_factory=list)
-    min_percentage: int = 99
+    min_percentage: int = 20
     max_percentage: int = 100
     volume: float = 0.8
     poll_interval: float = 3.0
@@ -72,6 +78,14 @@ class Config:
     
     # Proxy Configuration Parameter
     proxy_url: str = ""
+    
+    # Worker relay settings (defaults to hosted worker, users can self-host)
+    worker_url: str = DEFAULT_WORKER_URL
+    worker_token: str = ""
+    admin_key: str = ""
+    
+    # Thief catcher alarm sound (falls back to bundled default)
+    alarm_files: List[str] = field(default_factory=lambda: [DEFAULT_ALARM_FILE])
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Config":
