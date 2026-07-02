@@ -17,7 +17,7 @@ A cross-platform battery monitor and thief catcher. Works on your phone (Termux)
 ```bash
 pkg update && pkg upgrade -y
 pkg install python termux-api mpv git -y
-git clone <your-repo-url>
+git clone https://github.com/Saman-ghorayshi/battery-music-notifier
 cd batterytest
 pip install -e .
 ```
@@ -25,7 +25,7 @@ Install the **Termux:API** app from F-Droid or Google Play.
 
 **Windows / macOS / Linux:**
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Saman-ghorayshi/battery-music-notifier
 cd batterytest
 pip install -e .
 ```
