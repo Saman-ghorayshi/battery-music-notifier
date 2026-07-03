@@ -3,19 +3,20 @@
 
 When armed, watches for the transition: charging -> not charging.
 If the charger is unplugged while armed, fires an alert immediately.
-The alert goes through the worker relay (or local socket fallback).
+The alert goes through the worker relay, local socket, or Telegram bot.
 
 Arming modes:
-  - Local: plays alarm sound on this device directly
-  - Relay: sends THIEF_ALERT to worker, laptop polls and plays alarm
-  - Both:  does both simultaneously
+  - Local:    plays alarm sound on this device directly
+  - Relay:    sends THIEF_ALERT to worker, laptop polls and plays alarm
+  - Both:     does both simultaneously (default)
+  - Telegram: sends THIEF_ALERT via Telegram bot description (cloud only)
 """
 from __future__ import annotations
 import time
 import logging
 import threading
 from .battery import Battery
-from .connection import detect_environment
+from .connection import detect_environment, get_effective_proxy
 from .player import Player
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,8 @@ class ThiefCatcher:
         self.worker = worker_client
         self.local_port = local_port
         self.env = detect_environment()
+        self.effective_proxy = get_effective_proxy(config)
+        self._mode = "both"  # Remember mode for _disarm cleanup
 
         self._stop_event = threading.Event()
         self._armed = False
@@ -49,7 +52,7 @@ class ThiefCatcher:
         """Start monitoring for charger unplug.
 
         Args:
-            mode: 'local', 'relay', or 'both'
+            mode: 'local', 'relay', 'both', or 'telegram'
             verbose: print status messages
             force: arm even if device is not currently charging
         """
@@ -71,6 +74,7 @@ class ThiefCatcher:
 
         self._armed = True
         self._alert_active = False
+        self._mode = mode  # Remember mode for _disarm cleanup
 
         # Remember the state at arm time so we can detect unplug-during-grace
         was_charging_at_arm = info.charging
@@ -143,6 +147,11 @@ class ThiefCatcher:
                 if verbose:
                     print("  [LOCAL] Alarm playing on this device")
 
+        # Telegram-only mode: send via bot description (no worker, no socket)
+        if mode == "telegram":
+            self._send_telegram_alert("THIEF_ALERT", verbose)
+            return
+
         # Relay alarm: send to worker, laptop will pick it up
         if mode == "relay" and self.worker:
             success = self.worker.send_alert(
@@ -186,11 +195,33 @@ class ThiefCatcher:
             if self.player:
                 self.player.stop()
 
+        if mode == "telegram":
+            self._send_telegram_alert("THIEF_STOP", verbose=False)
+
         if mode in ("relay", "both") and self.worker:
             self.worker.clear_alert()
 
         if mode in ("relay", "both"):
             self._send_local_socket("THIEF_STOP")
+
+    def _send_telegram_alert(self, command: str, verbose: bool = True) -> None:
+        """Send alert command via Telegram bot description (cloud-only mode)."""
+        if not self.cfg or not getattr(self.cfg, 'telegram_token', ''):
+            if verbose:
+                print("  [TELEGRAM] No telegram_token configured, cannot send cloud alert.")
+            return
+        try:
+            import requests
+            proxies = {"http": self.effective_proxy, "https": self.effective_proxy} if self.effective_proxy else None
+            url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/setMyDescription"
+            r = requests.post(url, json={"description": command}, proxies=proxies, timeout=5)
+            r.raise_for_status()
+            if verbose:
+                print(f"  [TELEGRAM] {command} sent via bot description")
+        except Exception as e:
+            log.error("Telegram alert send failed: %s", e)
+            if verbose:
+                print(f"  [TELEGRAM] Failed to send {command}: {e}")
 
     def _send_local_socket(self, command: str) -> None:
         """Send command via local socket as fallback."""
@@ -203,12 +234,18 @@ class ThiefCatcher:
 
     def _disarm(self) -> None:
         """Disarm and clean up."""
+        # If alert was active, send stop through the same mode that triggered it.
+        # _stop_alert handles player.stop(), worker.clear_alert(), and telegram stop.
+        if self._alert_active:
+            self._stop_alert(self._mode)
+        else:
+            # No active alert, just stop the player if it's playing
+            if self.player:
+                self.player.stop()
+            if self.worker:
+                self.worker.clear_alert()
         self._armed = False
         self._alert_active = False
-        if self.player:
-            self.player.stop()
-        if self.worker:
-            self.worker.clear_alert()
 
     @property
     def is_armed(self) -> bool:

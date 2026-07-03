@@ -52,6 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument("--port", type=int, default=8000, help="Port to use")
     start.add_argument("-v", "--verbose", action="store_true")
     start.add_argument("--config", type=Path)
+    start.add_argument("--role", choices=["auto", "client", "server"], default="auto",
+                       help="Force role: auto (detect by platform), client (battery watcher), server (alert player). Default: auto")
+    start.add_argument("--mode", choices=["auto", "local", "telegram"], default="auto",
+                       help="Connection mode: auto (try local then cloud), local (socket/USB only), telegram (cloud only). Default: auto")
 
     # run: standalone local monitoring (original behavior)
     run = sub.add_parser("run", help="Start local monitoring (single device).")
@@ -79,6 +83,8 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8000, help="Port to listen on.")
     serve.add_argument("-v", "--verbose", action="store_true")
     serve.add_argument("--config", type=Path)
+    serve.add_argument("--mode", choices=["auto", "local", "telegram"], default="auto",
+                       help="Connection mode: auto (all channels), local (socket only, no Telegram polling), telegram (Telegram only, no socket). Default: auto")
 
     # client: client mode (phone side)
     client = sub.add_parser("client", help="Start the remote battery monitor (run on phone).")
@@ -89,11 +95,13 @@ def _build_parser() -> argparse.ArgumentParser:
     client.add_argument("--port", type=int, default=8000, help="Laptop socket port.")
     client.add_argument("-v", "--verbose", action="store_true")
     client.add_argument("--config", type=Path)
+    client.add_argument("--mode", choices=["auto", "local", "telegram"], default="auto",
+                        help="Connection mode: auto (try local then cloud), local (socket/USB only, no Telegram), telegram (cloud only, skip discovery). Default: auto")
 
     # arm: thief catcher mode
     arm = sub.add_parser("arm", help="Arm thief catcher: alarm if charger unplugged.")
-    arm.add_argument("--mode", choices=["local", "relay", "both"], default="both",
-                     help="Alert mode: local (play here), relay (send to worker), both (default)")
+    arm.add_argument("--mode", choices=["local", "relay", "both", "telegram"], default="both",
+                     help="Alert mode: local (play here), relay (send to worker), both (default), telegram (cloud only via bot description)")
     arm.add_argument("--force", action="store_true", help="Arm even if not currently charging")
     arm.add_argument("--port", type=int, default=8000, help="Local socket port for fallback")
     arm.add_argument("-v", "--verbose", action="store_true")
@@ -355,35 +363,42 @@ socket_secret = "{esc(socket_secret)}"
         print(f"  Subnet:      {env.subnet or 'not detected'}")
         print()
 
-        if env.is_termux or env.is_android:
-            # Phone: start as client
-            print("  Detected: Mobile device (Termux/Android)")
-            print("  Role: CLIENT (battery monitor -> sends to laptop)")
+        # Determine role: explicit --role flag overrides platform detection
+        if args.role == "client":
+            is_client = True
+        elif args.role == "server":
+            is_client = False
+        else:
+            # auto: detect by platform
+            is_client = env.is_termux or env.is_android
+
+        if is_client:
+            # Phone/watcher: start as client
+            print("  Role: CLIENT (battery monitor -> sends alerts)")
             print()
             if env.is_termux:
                 print("  Reminder: Run 'termux-wake-lock' to prevent Android from killing the app!")
             print()
             from .remote import RemoteMonitor
-            RemoteMonitor(cfg, args.host, args.port).run()
+            RemoteMonitor(cfg, args.host, args.port, conn_mode=args.mode).run()
         else:
-            # Desktop: start as server
-            print("  Detected: Desktop/laptop")
-            print("  Role: SERVER (listens for phone commands -> plays music)")
+            # Desktop/alert player: start as server
+            print("  Role: SERVER (listens for commands -> plays sound)")
             print()
             from .remote import NotificationServer
-            NotificationServer(cfg, args.host, args.port).run()
+            NotificationServer(cfg, args.host, args.port, conn_mode=args.mode).run()
         return 0
 
     if args.cmd == "serve":
         setup_logging(args.verbose, cfg.log_file)
         from .remote import NotificationServer
-        NotificationServer(cfg, args.host, args.port).run()
+        NotificationServer(cfg, args.host, args.port, conn_mode=args.mode).run()
         return 0
 
     if args.cmd == "client":
         setup_logging(args.verbose, cfg.log_file)
         from .remote import RemoteMonitor
-        RemoteMonitor(cfg, args.host, args.port).run()
+        RemoteMonitor(cfg, args.host, args.port, conn_mode=args.mode).run()
         return 0
 
     # arm: thief catcher
@@ -399,9 +414,14 @@ socket_secret = "{esc(socket_secret)}"
         print(f"  Environment: {env.platform_name}")
         print(f"  Mode: {args.mode}")
 
-        # Build worker client if configured
+        # Build worker client if configured (skip for telegram and local modes)
         worker = None
-        if cfg.worker_url and args.mode in ("relay", "both"):
+        if args.mode == "telegram":
+            if not cfg.telegram_token:
+                print("  [ERROR] Telegram mode requires telegram_token. Run 'battery-music init' first.")
+                return 2
+            print("  Telegram-only mode: alerts go through bot description.")
+        elif cfg.worker_url and args.mode in ("relay", "both"):
             from .worker_client import WorkerClient
             worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
             if not cfg.worker_token:

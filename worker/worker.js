@@ -147,7 +147,7 @@ async function handleSendAlert(request, db, user, env) {
     return json({ ok: false, error: "rate_limited" }, 429);
   }
   cleanRateBuckets();
-  cleanExpiredSessions(db);
+  await cleanExpiredSessions(db);
   const batteryPct = typeof body.battery_pct === "number" ? body.battery_pct : -1;
   const isCharging = body.is_charging ? 1 : 0;
   const t = now();

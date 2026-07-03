@@ -636,3 +636,261 @@ def test_worker_has_session_cleanup():
         "worker.js missing cleanExpiredSessions function"
     assert "DELETE FROM admin_sessions WHERE expires_at" in worker_src, \
         "worker.js missing DELETE for expired sessions"
+
+
+# ---------------------------------------------------------------------------
+# 19. RemoteMonitor conn_mode: telegram skips local discovery
+# ---------------------------------------------------------------------------
+
+def test_remote_monitor_telegram_mode_skips_discovery(mock_config):
+    """RemoteMonitor in telegram mode should not attempt local discovery."""
+    from battery_notifier.remote import RemoteMonitor
+
+    monitor = RemoteMonitor(mock_config, "auto", 8000, conn_mode="telegram")
+    assert monitor.conn_mode == "telegram"
+    # resolved_host should stay None (no discovery attempted)
+    assert monitor.resolved_host is None
+
+
+def test_remote_monitor_local_mode_does_not_use_telegram(mock_config):
+    """RemoteMonitor in local mode should have conn_mode set to local."""
+    from battery_notifier.remote import RemoteMonitor
+
+    monitor = RemoteMonitor(mock_config, "auto", 8000, conn_mode="local")
+    assert monitor.conn_mode == "local"
+
+
+# ---------------------------------------------------------------------------
+# 20. NotificationServer conn_mode: telegram skips socket
+# ---------------------------------------------------------------------------
+
+def test_notification_server_telegram_mode_sets_flag(mock_config):
+    """NotificationServer in telegram mode should set conn_mode."""
+    from battery_notifier.remote import NotificationServer
+
+    server = NotificationServer(mock_config, "auto", 8000, conn_mode="telegram")
+    assert server.conn_mode == "telegram"
+
+
+def test_notification_server_local_mode_sets_flag(mock_config):
+    """NotificationServer in local mode should set conn_mode."""
+    from battery_notifier.remote import NotificationServer
+
+    server = NotificationServer(mock_config, "auto", 8000, conn_mode="local")
+    assert server.conn_mode == "local"
+
+
+# ---------------------------------------------------------------------------
+# 21. CLI parser accepts --mode and --role flags
+# ---------------------------------------------------------------------------
+
+def test_cli_start_has_role_and_mode_flags():
+    """start command should accept --role and --mode flags."""
+    from battery_notifier.cli import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args(["start", "--role", "client", "--mode", "telegram"])
+    assert args.role == "client"
+    assert args.mode == "telegram"
+
+
+def test_cli_serve_has_mode_flag():
+    """serve command should accept --mode flag."""
+    from battery_notifier.cli import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args(["serve", "--mode", "local"])
+    assert args.mode == "local"
+
+
+def test_cli_client_has_mode_flag():
+    """client command should accept --mode flag."""
+    from battery_notifier.cli import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args(["client", "--mode", "telegram"])
+    assert args.mode == "telegram"
+
+
+def test_cli_arm_has_telegram_mode():
+    """arm command should accept --mode telegram."""
+    from battery_notifier.cli import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args(["arm", "--mode", "telegram"])
+    assert args.mode == "telegram"
+
+
+# ---------------------------------------------------------------------------
+# 22. ThiefCatcher telegram mode sends alert via bot description
+# ---------------------------------------------------------------------------
+
+@patch("requests.post")
+def test_thief_catcher_telegram_mode_sends_alert(mock_post):
+    """ThiefCatcher in telegram mode should send via bot description, not socket."""
+    from battery_notifier.thief_catcher import ThiefCatcher
+
+    cfg = Config()
+    cfg.telegram_token = "fake_token"
+    cfg.alarm_files = ["alarm.mp3"]
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_post.return_value = mock_resp
+
+    mock_player = MagicMock()
+    tc = ThiefCatcher(cfg, player=mock_player)
+    tc._trigger_alert("telegram", 75, verbose=False)
+
+    # Player should NOT play locally in telegram mode
+    mock_player.play.assert_not_called()
+    # Should have called Telegram setMyDescription
+    mock_post.assert_called_once()
+    call_url = mock_post.call_args[0][0]
+    assert "setMyDescription" in call_url
+
+
+@patch("requests.post")
+def test_thief_catcher_telegram_mode_stop_sends_stop(mock_post):
+    """ThiefCatcher stop in telegram mode should send THIEF_STOP via bot description."""
+    from battery_notifier.thief_catcher import ThiefCatcher
+
+    cfg = Config()
+    cfg.telegram_token = "fake_token"
+    cfg.alarm_files = ["alarm.mp3"]
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_post.return_value = mock_resp
+
+    mock_player = MagicMock()
+    tc = ThiefCatcher(cfg, player=mock_player)
+    tc._stop_alert("telegram")
+
+    mock_post.assert_called_once()
+    call_url = mock_post.call_args[0][0]
+    call_json = mock_post.call_args[1]["json"]
+    assert "setMyDescription" in call_url
+    assert call_json["description"] == "THIEF_STOP"
+
+
+# ---------------------------------------------------------------------------
+# 23. RemoteMonitor telegram mode returns error without token
+# ---------------------------------------------------------------------------
+
+def test_remote_monitor_telegram_mode_without_token_returns_error(mock_config, capsys):
+    """RemoteMonitor in telegram mode without token should print error and return."""
+    from battery_notifier.remote import RemoteMonitor
+
+    mock_config.telegram_token = ""
+    monitor = RemoteMonitor(mock_config, "auto", 8000, conn_mode="telegram")
+    monitor.run()
+
+    captured = capsys.readouterr()
+    assert "telegram_token" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# 24. ThiefCatcher _disarm sends THIEF_STOP in telegram mode
+# ---------------------------------------------------------------------------
+
+@patch("requests.post")
+def test_thief_catcher_disarm_sends_telegram_stop(mock_post):
+    """_disarm() should send THIEF_STOP via Telegram when alert was active in telegram mode."""
+    from battery_notifier.thief_catcher import ThiefCatcher
+
+    cfg = Config()
+    cfg.telegram_token = "fake_token_1234567890"
+    cfg.alarm_files = ["alarm.mp3"]
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_post.return_value = mock_resp
+
+    mock_player = MagicMock()
+    tc = ThiefCatcher(cfg, player=mock_player)
+    tc._armed = True
+    tc._alert_active = True
+    tc._mode = "telegram"
+    tc._disarm()
+
+    # Should have sent THIEF_STOP via Telegram
+    mock_post.assert_called_once()
+    call_json = mock_post.call_args[1]["json"]
+    assert call_json["description"] == "THIEF_STOP"
+    assert tc._armed is False
+    assert tc._alert_active is False
+
+
+def test_thief_catcher_disarm_no_alert_does_not_send_telegram():
+    """_disarm() should NOT send Telegram when no alert was active."""
+    from battery_notifier.thief_catcher import ThiefCatcher
+
+    cfg = Config()
+    cfg.telegram_token = "fake_token_1234567890"
+    cfg.alarm_files = ["alarm.mp3"]
+
+    mock_player = MagicMock()
+    tc = ThiefCatcher(cfg, player=mock_player)
+    tc._armed = True
+    tc._alert_active = False  # No alert active
+    tc._mode = "telegram"
+    tc._disarm()
+
+    # Should not send any Telegram messages
+    # (player.stop still called for cleanup, but no Telegram post)
+
+
+# ---------------------------------------------------------------------------
+# 25. NotificationServer telegram mode without token exits early
+# ---------------------------------------------------------------------------
+
+def test_notification_server_telegram_no_token_exits(mock_config, capsys):
+    """Server in telegram mode without token should print error and return, not hang."""
+    from battery_notifier.remote import NotificationServer
+
+    mock_config.telegram_token = ""
+    server = NotificationServer(mock_config, "auto", 8000, conn_mode="telegram")
+    server.run()
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.out
+    assert "telegram_token" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# 26. _dispatch_client_web_alerts works with token only (no chat_id needed)
+# ---------------------------------------------------------------------------
+
+@patch("battery_notifier.remote.requests")
+def test_dispatch_client_web_alerts_token_only_no_chat_id(mock_requests):
+    """_dispatch_client_web_alerts should work with just telegram_token.
+
+    The bot description trick (setMyDescription) does NOT need a chat_id.
+    Requiring both silently broke cloud fallback for users who only set a token.
+    """
+    from battery_notifier.remote import RemoteMonitor
+
+    cfg = Config()
+    cfg.telegram_token = "fake_token"
+    cfg.telegram_chat_id = ""  # No chat_id set!
+    cfg.min_percentage = 20
+    cfg.max_percentage = 80
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status.return_value = None
+    mock_requests.post.return_value = mock_resp
+
+    rm = RemoteMonitor(cfg, host="auto", port=8000)
+    result = rm._dispatch_client_web_alerts("START")
+
+    assert result is True
+
+
+# ---------------------------------------------------------------------------
+# 27. Worker.js: cleanExpiredSessions is awaited
+# ---------------------------------------------------------------------------
+
+def test_worker_clean_sessions_awaited():
+    """worker.js should await cleanExpiredSessions (async function)."""
+    with open("worker/worker.js") as f:
+        src = f.read()
+    assert "await cleanExpiredSessions(db)" in src, \
+        "cleanExpiredSessions is async but not awaited"
