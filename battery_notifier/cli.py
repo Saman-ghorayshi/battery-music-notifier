@@ -21,9 +21,9 @@ def _save_worker_token(token: str) -> None:
             return
         content = cfg_path.read_text()
         if 'worker_token' in content:
-            # Replace existing token
+            # Replace existing token (space-tolerant regex handles "worker_token=value" too)
             content = re.sub(
-                r'worker_token = "[^"]*"',
+                r'worker_token\s*=\s*"[^"]*"',
                 f'worker_token = "{token}"',
                 content,
             )
@@ -40,7 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="battery-music",
         description="Play music when battery reaches target.",
     )
-    p.add_argument("-V", "--version", action="version", version="%(prog)s 1.1.0")
+    p.add_argument("-V", "--version", action="version", version="%(prog)s 1.2.0")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # start: one-command auto-detect (the smart entry point)
@@ -129,6 +129,23 @@ def main(argv=None) -> int:
 
         print(" Welcome to the Battery Music Notifier setup!")
 
+        # Numeric input helpers with validation (prevents TOML injection / crash)
+        def ask_int(prompt, default):
+            val = input(prompt).strip() or str(default)
+            try:
+                return int(val)
+            except ValueError:
+                print(f"  Invalid number, using default {default}.")
+                return default
+
+        def ask_float(prompt, default):
+            val = input(prompt).strip() or str(default)
+            try:
+                return float(val)
+            except ValueError:
+                print(f"  Invalid number, using default {default}.")
+                return default
+
         print("\n[Opening file dialog to select your music file...]")
         music_path = ""
         try:
@@ -151,16 +168,28 @@ def main(argv=None) -> int:
         else:
             print(f" Selected: {music_path}")
 
-        min_pct = input("Enter minimum battery percentage to trigger [20]: ").strip() or "20"
-        max_pct = input("Enter maximum battery percentage [100]: ").strip() or "100"
-        volume = input("Enter volume 0.0 to 1.0 [0.8]: ").strip() or "0.8"
-        poll = input("Enter poll interval in seconds [3.0]: ").strip() or "3.0"
+        min_pct = ask_int("Enter minimum battery percentage to trigger [20]: ", 20)
+        max_pct = ask_int("Enter maximum battery percentage [100]: ", 100)
+        if min_pct >= max_pct:
+            print("  [WARN] min must be less than max. Resetting to defaults (20/100).")
+            min_pct, max_pct = 20, 100
+        volume = ask_float("Enter volume 0.0 to 1.0 [0.8]: ", 0.8)
+        if not (0.0 <= volume <= 1.0):
+            print("  [WARN] volume must be 0.0-1.0. Resetting to 0.8.")
+            volume = 0.8
+        poll = ask_float("Enter poll interval in seconds [3.0]: ", 3.0)
+        if poll <= 0:
+            print("  [WARN] poll interval must be positive. Resetting to 3.0.")
+            poll = 3.0
         annoying_ans = input("Loop music annoyingly until unplugged? (y/N): ").strip().lower()
         annoying = "true" if annoying_ans in ("y", "yes") else "false"
 
         print("\n [Quiet Hours (Do Not Disturb)]")
-        quiet_start = input("Enter quiet hours start (24h format, e.g., 22) [22]: ").strip() or "22"
-        quiet_end = input("Enter quiet hours end (24h format, e.g., 8) [8]: ").strip() or "8"
+        quiet_start = ask_int("Enter quiet hours start (24h format, e.g., 22) [22]: ", 22)
+        quiet_end = ask_int("Enter quiet hours end (24h format, e.g., 8) [8]: ", 8)
+        if not (0 <= quiet_start <= 23) or not (0 <= quiet_end <= 23):
+            print("  [WARN] quiet hours must be 0-23. Resetting to 22/8.")
+            quiet_start, quiet_end = 22, 8
 
         print("\n [Network Proxy Configuration Settings]")
         use_proxy = input("Do you need a proxy to bypass network blocks/Telegram restrictions? (y/N): ").strip().lower()
@@ -237,36 +266,57 @@ def main(argv=None) -> int:
         if al_ans in ("y", "yes"):
             alarm_path = input("  Enter path to alarm sound file: ").strip()
 
+        # Local socket shared secret (optional security feature)
+        print("\n [Local Socket Security]")
+        print("  Optional: set a shared secret to prevent LAN attackers from")
+        print("  sending STOP to silence the thief-catcher alarm.")
+        socket_secret = ""
+        sec_ans = input("Set a socket secret? (y/N): ").strip().lower()
+        if sec_ans in ("y", "yes"):
+            import secrets as _secrets
+            socket_secret = _secrets.token_hex(8)
+            print(f"  Generated secret: {socket_secret}")
+            print("  (Saved to config. Both devices must use the same secret.)")
+
         APP_DIR.mkdir(parents=True, exist_ok=True)
+
+        # For TOML: use double-quoted strings with escaping for all string values.
+        # Paths need backslash escaping (Windows), and all strings need quote escaping.
+        # Numeric values (int/float) are written bare.
+        def esc(s): return s.replace("\\", "\\\\").replace('"', '\\"')
+
         target.write_text(
             f'''[battery_notifier]
-music_files = ["{music_path}"]
+music_files = ["{esc(music_path)}"]
 min_percentage = {min_pct}
 max_percentage = {max_pct}
 volume = {volume}
 poll_interval = {float(poll)}
 annoying = {annoying}
 quiet_hours = [{int(quiet_start)}, {int(quiet_end)}]
-proxy_url = "{proxy_url}"
+proxy_url = "{esc(proxy_url)}"
 
 # Telegram Integration
-telegram_token = "{telegram_token}"
-telegram_chat_id = "{telegram_chat_id}"
+telegram_token = "{esc(telegram_token)}"
+telegram_chat_id = "{esc(telegram_chat_id)}"
 
 # Email Integration
-email_smtp_server = "{email_smtp_server}"
+email_smtp_server = "{esc(email_smtp_server)}"
 email_smtp_port = {email_smtp_port}
-email_sender = "{email_sender}"
-email_password = "{email_password}"
-email_receiver = "{email_receiver}"
+email_sender = "{esc(email_sender)}"
+email_password = "{esc(email_password)}"
+email_receiver = "{esc(email_receiver)}"
 
 # Worker Relay
-worker_url = "{worker_url}"
-worker_token = "{worker_token}"
-admin_key = "{admin_key}"
+worker_url = "{esc(worker_url)}"
+worker_token = "{esc(worker_token)}"
+admin_key = "{esc(admin_key)}"
 
 # Thief Catcher Alarm
-alarm_files = ["{alarm_path}"]
+alarm_files = ["{esc(alarm_path)}"]
+
+# Local Socket Security (optional shared secret)
+socket_secret = "{esc(socket_secret)}"
 '''
         )
         print(f"\n Config successfully written to {target}")
@@ -380,38 +430,12 @@ alarm_files = ["{alarm_path}"]
         tc = ThiefCatcher(cfg, player=player, worker_client=worker, local_port=args.port)
 
         if args.force:
-            # Skip the charging check
             info = tc.battery.read()
             print(f"  Battery: {info.percentage}%, charging: {info.charging}")
-            print("  --force used: arming even if not charging")
-            print("  Will monitor for plug -> unplug transition.")
+            print("  --force used: arming even if not charging.")
             print("  Press Ctrl+C to disarm.\n")
-            tc._armed = True
-            import time as _time
-            _time.sleep(1)
-            was_charging = tc.battery.read().charging
-            while not tc._stop_event.is_set():
-                try:
-                    info = tc.battery.read()
-                    if was_charging and not info.charging and not tc._alert_active:
-                        tc._trigger_alert(args.mode, info.percentage, verbose=True)
-                        tc._alert_active = True
-                    elif not was_charging and info.charging and tc._alert_active:
-                        print("  Charger reconnected. Stopping alarm.")
-                        tc._stop_alert(args.mode)
-                        tc._alert_active = False
-                    was_charging = info.charging
-                except KeyboardInterrupt:
-                    break
-                except Exception as e:
-                    log.error("Thief catcher loop error: %s", e)
-                import time as _time
-                _time.sleep(1.0)
-            tc._disarm()
-            print("  Thief Catcher DISARMED.")
-            return 0
 
-        tc.arm(mode=args.mode, verbose=True)
+        tc.arm(mode=args.mode, verbose=True, force=args.force)
         return 0
 
     # relay: laptop polls worker for alerts, plays alarm
@@ -447,13 +471,35 @@ alarm_files = ["{alarm_path}"]
                 return 1
 
         alarm_files = cfg.alarm_files if cfg.alarm_files else cfg.music_files
+        if not alarm_files:
+            print("  [ERROR] No alarm sound configured. Run 'battery-music init' first.")
+            return 2
+
         player = Player(alarm_files, cfg.volume, annoying=True)
         last_alert_active = False
+        consecutive_errors = 0
 
         while True:
             try:
                 resp = worker.poll()
-                if resp.get("ok"):
+                consecutive_errors = 0
+                if not resp.get("ok"):
+                    error = resp.get("error", "unknown")
+                    if error == "unauthorized":
+                        print("  [ERROR] Worker rejected token. Re-registering...")
+                        token = worker.register(device_name=env.platform_name, platform=env.platform_name)
+                        if token:
+                            print(f"  Re-registered. New token: {token[:8]}...")
+                            cfg.worker_token = token
+                            _save_worker_token(token)
+                        else:
+                            print("  [ERROR] Re-registration failed. Check worker URL and network.")
+                    elif error == "banned":
+                        print("  [ERROR] Device is banned by admin. Contact admin to resolve.")
+                        break
+                    else:
+                        print(f"  [WARN] Worker poll error: {error}")
+                else:
                     alert_active = resp.get("alert_active", 0)
                     alert_type = resp.get("alert_type", "")
                     battery_pct = resp.get("battery_pct", -1)
@@ -472,7 +518,13 @@ alarm_files = ["{alarm_path}"]
                 player.stop()
                 break
             except Exception as e:
+                consecutive_errors += 1
                 log.error("Relay poll error: %s", e)
+                if consecutive_errors <= 3:
+                    print(f"  [WARN] Connection error ({consecutive_errors}): {e}")
+                elif consecutive_errors == 10:
+                    print("  [ERROR] Worker unreachable after 10 attempts. Check network and worker URL.")
+                    print("  Continuing to retry every 2s...")
 
             _time.sleep(2)
         return 0
@@ -504,7 +556,10 @@ alarm_files = ["{alarm_path}"]
             if not cfg.admin_key:
                 print("  [ERROR] No admin_key configured.")
                 return 2
-            worker.admin_login(cfg.admin_key)
+            session = worker.admin_login(cfg.admin_key)
+            if not session:
+                print("  [ERROR] Admin login failed. Check your admin_key.")
+                return 1
             stats = worker.admin_stats()
             if stats.get("ok"):
                 s = stats["stats"]
@@ -523,7 +578,10 @@ alarm_files = ["{alarm_path}"]
             if not cfg.admin_key:
                 print("  [ERROR] No admin_key configured.")
                 return 2
-            worker.admin_login(cfg.admin_key)
+            session = worker.admin_login(cfg.admin_key)
+            if not session:
+                print("  [ERROR] Admin login failed. Check your admin_key.")
+                return 1
             if not args.user_id:
                 print("  Usage: battery-music admin ban --user-id 123")
                 return 1
@@ -531,11 +589,29 @@ alarm_files = ["{alarm_path}"]
             print(f"  Banned user {args.user_id}: {'OK' if ok else 'FAILED'}")
             return 0 if ok else 1
 
+        if args.action == "unban":
+            if not cfg.admin_key:
+                print("  [ERROR] No admin_key configured.")
+                return 2
+            session = worker.admin_login(cfg.admin_key)
+            if not session:
+                print("  [ERROR] Admin login failed. Check your admin_key.")
+                return 1
+            if not args.user_id:
+                print("  Usage: battery-music admin unban --user-id 123")
+                return 1
+            ok = worker.admin_unban(args.user_id)
+            print(f"  Unbanned user {args.user_id}: {'OK' if ok else 'FAILED'}")
+            return 0 if ok else 1
+
         if args.action == "broadcast":
             if not cfg.admin_key:
                 print("  [ERROR] No admin_key configured.")
                 return 2
-            worker.admin_login(cfg.admin_key)
+            session = worker.admin_login(cfg.admin_key)
+            if not session:
+                print("  [ERROR] Admin login failed. Check your admin_key.")
+                return 1
             ok = worker.admin_broadcast(args.alert_type)
             print(f"  Broadcast {args.alert_type}: {'OK' if ok else 'FAILED'}")
             return 0 if ok else 1
@@ -544,7 +620,10 @@ alarm_files = ["{alarm_path}"]
             if not cfg.admin_key:
                 print("  [ERROR] No admin_key configured.")
                 return 2
-            worker.admin_login(cfg.admin_key)
+            session = worker.admin_login(cfg.admin_key)
+            if not session:
+                print("  [ERROR] Admin login failed. Check your admin_key.")
+                return 1
             ok = worker.admin_clear_all()
             print(f"  Clear all alerts: {'OK' if ok else 'FAILED'}")
             return 0 if ok else 1

@@ -23,6 +23,9 @@ class Player:
     def play(self) -> bool:
         if not self.files:
             return False
+        # Stop any existing playback before starting a new one
+        if self._playing:
+            self.stop()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, args=(self.files,), daemon=True)
         self._thread.start()
@@ -33,34 +36,46 @@ class Player:
         import time
         try:
             first = random.choice(files)
-            
+
+            # Try sounddevice/soundfile first (desktop platforms)
+            sd = None
+            sf = None
             try:
                 import sounddevice as sd
                 import soundfile as sf
-                
-                data, sr = sf.read(first, dtype="float32")
-                while not self._stop.is_set():
-                    duration = len(data) / sr
-                    start_time = time.time()
-                    sd.play(data * self.volume, sr)
-                    
-                    while time.time() - start_time < duration and not self._stop.is_set():
-                        time.sleep(0.1)
-                        
-                    if self._stop.is_set():
-                        sd.stop()
-                        break
-                    if not self.annoying:
-                        break
-                        
-                    nxt = random.choice(files)
-                    if nxt != first:
-                        data, sr = sf.read(nxt, dtype="float32")
-                        
-            except (ImportError, Exception):
+            except ImportError:
+                pass
+
+            if sd is not None and sf is not None:
+                try:
+                    data, sr = sf.read(first, dtype="float32")
+                    while not self._stop.is_set():
+                        duration = len(data) / sr
+                        start_time = time.time()
+                        sd.play(data * self.volume, sr)
+
+                        while time.time() - start_time < duration and not self._stop.is_set():
+                            time.sleep(0.1)
+
+                        if self._stop.is_set():
+                            sd.stop()
+                            break
+                        if not self.annoying:
+                            break
+
+                        nxt = random.choice(files)
+                        if nxt != first:
+                            data, sr = sf.read(nxt, dtype="float32")
+                except Exception as e:
+                    # Runtime failure (audio device, format) — fall through to CLI player
+                    log.warning("sounddevice playback failed (%s), falling back to CLI player", e)
+                    sd = None
+
+            # CLI player fallback (Termux, or desktop where sounddevice failed)
+            if sd is None:
                 import shutil
                 import subprocess
-                
+
                 player_cmd = None
                 if shutil.which("termux-media-player"):
                     player_cmd = ["termux-media-player", "play"]
@@ -72,32 +87,52 @@ class Player:
                     player_cmd = ["play", "-q"]
 
                 if not player_cmd:
-                    log.error(" Audio engine failure: sounddevice missing and no system CLI player found.")
+                    log.error("Audio engine failure: sounddevice missing and no system CLI player found.")
                     return
+
+                is_termux = player_cmd[0] == "termux-media-player"
 
                 while not self._stop.is_set():
                     current_track = random.choice(files)
-                    proc = subprocess.Popen(
-                        player_cmd + [current_track], 
-                        stdout=subprocess.DEVNULL, 
-                        stderr=subprocess.DEVNULL
-                    )
-                    
-                    while proc.poll() is None and not self._stop.is_set():
-                        time.sleep(0.1)
-                        
-                    if self._stop.is_set():
-                        proc.terminate()
-                        try:
-                            if player_cmd[0] == "termux-media-player":
-                                subprocess.run(["termux-media-player", "stop"], stdout=subprocess.DEVNULL)
-                        except Exception:
-                            pass
-                        break
-                        
-                    if not self.annoying:
-                        break
-                        
+
+                    if is_termux:
+                        # termux-media-player is async: it starts a background
+                        # service and exits immediately. Poll player state instead
+                        # of process state, otherwise the loop breaks instantly.
+                        subprocess.run(
+                            player_cmd + [current_track],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        while not self._stop.is_set():
+                            info = subprocess.run(
+                                ["termux-media-player", "info"],
+                                capture_output=True, text=True,
+                            )
+                            if "playing" not in info.stdout.lower():
+                                break
+                            time.sleep(0.5)
+                        if self._stop.is_set():
+                            subprocess.run(["termux-media-player", "stop"], stdout=subprocess.DEVNULL)
+                            break
+                        if not self.annoying:
+                            subprocess.run(["termux-media-player", "stop"], stdout=subprocess.DEVNULL)
+                            break
+                    else:
+                        # Standard CLI players: process blocks until track finishes
+                        proc = subprocess.Popen(
+                            player_cmd + [current_track],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        while proc.poll() is None and not self._stop.is_set():
+                            time.sleep(0.1)
+                        if self._stop.is_set():
+                            proc.terminate()
+                            break
+                        if not self.annoying:
+                            break
+
         except Exception as e:
             log.error("Playback loop error: %s", e)
 

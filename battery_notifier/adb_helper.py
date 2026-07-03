@@ -49,11 +49,11 @@ def auto_setup_usb_bridge(mode: str = "reverse", port: int = 8000, max_retries: 
     """
     adb = find_adb_executable()
     if not adb:
-        log.warning("⚠️ ADB executable not found. Automatic USB tunneling skipped.")
-        print("💡 Tip: Install Android Platform Tools (ADB) or add it to your system PATH for auto-connection.")
+        log.warning("ADB executable not found. Automatic USB tunneling skipped.")
+        print("  Tip: Install Android Platform Tools (ADB) or add it to your system PATH for auto-connection.")
         return False
 
-    print("🔌 Listening for USB device connection... Please plug in your phone.")
+    print("  Listening for USB device connection... Please plug in your phone.")
     
     # Force start the local adb server
     try:
@@ -83,7 +83,7 @@ def auto_setup_usb_bridge(mode: str = "reverse", port: int = 8000, max_retries: 
 
             if devices:
                 target_device = devices[0]
-                print(f"✅ Found authorized USB device: {target_device}")
+                print(f"  Found authorized USB device: {target_device}")
                 
                 # Apply the requested bridge
                 if mode == "reverse":
@@ -94,19 +94,19 @@ def auto_setup_usb_bridge(mode: str = "reverse", port: int = 8000, max_retries: 
                     action_name = "Forward Port Tunnel"
 
                 subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print(f"🚀 {action_name} successfully set up over USB on port {port}!")
+                print(f"  {action_name} successfully set up over USB on port {port}!")
                 log.info("ADB Auto-Bridge %s set up successfully.", mode)
                 return True
                 
             if unauthorized_found:
-                print(f"⚠️ Device detected but UNAUTHORIZED! Please unlock your phone and tap 'Allow USB Debugging'. [Attempt {attempt}/{max_retries}]")
+                print(f"  [WARN] Device detected but UNAUTHORIZED! Please unlock your phone and tap 'Allow USB Debugging'. [Attempt {attempt}/{max_retries}]")
             else:
-                print(f"⏳ Waiting for phone to connect via USB... [Attempt {attempt}/{max_retries}]")
+                print(f"  Waiting for phone to connect via USB... [Attempt {attempt}/{max_retries}]")
 
         except Exception as e:
             log.debug("ADB check failed during attempt %d: %s", attempt, e)
 
         time.sleep(2)
 
-    print("❌ Auto-connection timed out. Please plug in your phone, turn on USB Debugging, and try again.")
+    print("  [ERROR] Auto-connection timed out. Please plug in your phone, turn on USB Debugging, and try again.")
     return False

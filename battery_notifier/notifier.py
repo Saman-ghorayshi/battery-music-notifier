@@ -52,13 +52,17 @@ class Notifier:
         try:
             url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
             payload = {"chat_id": self.cfg.telegram_chat_id, "text": f"{title}: {message}"}
-            requests.post(url, json=payload, proxies=proxies, timeout=5)
-            log.info("Telegram notification sent.")
+            r = requests.post(url, json=payload, proxies=proxies, timeout=5)
+            if r.status_code == 200 and r.json().get("ok"):
+                log.info("Telegram notification sent.")
+            else:
+                log.warning("Telegram send failed: HTTP %s, response: %s", r.status_code, r.text[:200])
         except Exception as e:
             log.warning("Telegram notification failed: %s", e)
     def _send_email(self, title: str, message: str) -> None:
         if not self.cfg or not self.cfg.email_sender or not self.cfg.email_password or not self.cfg.email_receiver:
             return
+        server = None
         try:
             import smtplib
             from email.mime.text import MIMEText
@@ -66,16 +70,26 @@ class Notifier:
             msg["Subject"] = title
             msg["From"] = self.cfg.email_sender
             msg["To"] = self.cfg.email_receiver
-            
+
             # Fix: Auto-detect SSL (465) vs TLS (587)
             if self.cfg.email_smtp_port == 465:
                 server = smtplib.SMTP_SSL(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
             else:
                 server = smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
                 server.starttls()
-                
+
             server.login(self.cfg.email_sender, self.cfg.email_password)
             server.send_message(msg)
             log.info("Email notification sent.")
         except Exception as e:
             log.warning("Email notification failed: %s", e)
+        finally:
+            # Always close the SMTP connection to prevent socket leaks
+            if server is not None:
+                try:
+                    server.quit()
+                except Exception:
+                    try:
+                        server.close()
+                    except Exception:
+                        pass

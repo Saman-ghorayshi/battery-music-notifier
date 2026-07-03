@@ -28,16 +28,28 @@ class Monitor:
                     time.sleep(self.cfg.poll_interval)
                     continue
 
-                info = self.battery.read()
-                
-                in_target = (self.cfg.min_percentage <= info.percentage <= self.cfg.max_percentage)
+                try:
+                    info = self.battery.read()
+                except Exception as e:
+                    log.error("Battery read failed: %s", e)
+                    time.sleep(self.cfg.poll_interval)
+                    continue
 
-                if info.charging and in_target and not self.player.playing:
+                # Threshold-edge logic: alert when battery reaches max (charging)
+                # or drops to min (discharging). Consistent with RemoteMonitor.
+                # This avoids false trigger when plugging in at mid-range.
+                should_alert = False
+                if info.charging and info.percentage >= self.cfg.max_percentage:
+                    should_alert = True
+                elif not info.charging and info.percentage <= self.cfg.min_percentage:
+                    should_alert = True
+
+                if should_alert and not self.player.playing:
                     if self.player.play():
-                        self.notifier.send("Battery target reached", f"{info.percentage}% reached.")
-                elif (not info.charging or info.percentage < self.cfg.min_percentage) and self.player.playing:
+                        self.notifier.send("Battery alert", f"{info.percentage}% reached.")
+                elif not should_alert and self.player.playing:
                     self.player.stop()
-                    self.notifier.send("Stopped", "Conditions no longer met.")
+                    self.notifier.send("Battery normal", "Conditions no longer met.")
 
                 time.sleep(self.cfg.poll_interval)
         except KeyboardInterrupt:

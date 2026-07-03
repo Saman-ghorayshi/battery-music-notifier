@@ -244,15 +244,56 @@ def _detect_vpn_unix() -> tuple[bool, Optional[str]]:
 
 def _detect_local_proxy() -> Optional[str]:
     """
-    Scan common proxy ports on 127.0.0.1.
+    Scan common proxy ports on 127.0.0.1 concurrently.
     Returns the first working proxy URL found, or None.
+    Uses threads to avoid 1.4s sequential delay on startup.
+    Verifies the port is actually a proxy (not just any listening service)
+    by sending an HTTP CONNECT and checking for a proxy-style response.
     """
-    for port, proxy_url in COMMON_PROXY_PORTS.items():
+    import concurrent.futures
+
+    def check_port(port: int, proxy_url: str) -> Optional[str]:
+        # Step 1: is anything listening?
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.2)
-            if s.connect_ex(("127.0.0.1", port)) == 0:
-                log.info("Auto-detected local proxy on port %d: %s", port, proxy_url)
-                return proxy_url
+            s.settimeout(0.1)
+            if s.connect_ex(("127.0.0.1", port)) != 0:
+                return None
+
+        # Step 2: verify it's a proxy (not some unrelated service)
+        # HTTP proxies respond to HTTP CONNECT with "HTTP/1.x ..."
+        # SOCKS5 proxies respond to 0x05 (version byte) with 0x05 0x00
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                s.connect(("127.0.0.1", port))
+                if proxy_url.startswith("socks5://"):
+                    # SOCKS5 handshake: version=5, methods=1, no-auth=0
+                    s.sendall(b"\x05\x01\x00")
+                    resp = s.recv(2)
+                    # Valid SOCKS5 response: version=5, selected method=0x00 (no auth)
+                    if len(resp) >= 2 and resp[0] == 0x05:
+                        return proxy_url
+                else:
+                    # HTTP proxy: send CONNECT, check for HTTP response line
+                    s.sendall(b"CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n")
+                    resp = s.recv(256)
+                    if resp.startswith(b"HTTP/"):
+                        return proxy_url
+        except Exception:
+            pass
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(COMMON_PROXY_PORTS)) as executor:
+        futures = {
+            executor.submit(check_port, p, u): u
+            for p, u in COMMON_PROXY_PORTS.items()
+        }
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                log.info("Auto-detected local proxy: %s", result)
+                executor.shutdown(wait=False, cancel_futures=True)
+                return result
     return None
 
 
@@ -510,17 +551,25 @@ def smart_bind_server(host: str, port: int) -> Optional[socket.socket]:
 # ---------------------------------------------------------------------------
 
 def send_command_with_ack(
-    host: str, port: int, command: str, timeout: float = 5.0
+    host: str, port: int, command: str, timeout: float = 5.0,
+    secret: str = "",
 ) -> bool:
     """
-    Send a command (START/STOP) to the server and wait for ACK confirmation.
-    Returns True only if the server acknowledged the command.
+    Send a command (START/STOP/THIEF_ALERT/THIEF_STOP) to the server and wait
+    for ACK confirmation. Returns True only if the server acknowledged.
+
+    If a shared secret is provided, the command is prefixed as "SECRET:command"
+    for server-side authentication.
     """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
             s.connect((host, port))
-            s.sendall(command.encode("utf-8"))
+            if secret:
+                payload = f"{secret}:{command}".encode("utf-8")
+            else:
+                payload = command.encode("utf-8")
+            s.sendall(payload)
             try:
                 ack = s.recv(1024).decode("utf-8").strip()
                 expected = f"{ACK_PREFIX}{command}"

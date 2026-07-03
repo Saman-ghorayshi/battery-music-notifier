@@ -91,6 +91,8 @@ class WorkerClient:
             return True
         if resp.get("error") == "rate_limited":
             log.warning("Rate limited by worker")
+        elif resp.get("error") == "banned":
+            log.error("Device is banned by admin — contact admin to resolve")
         else:
             log.error("Alert failed: %s", resp.get("error"))
         return False
@@ -137,6 +139,23 @@ class WorkerClient:
         try:
             r = requests.post(
                 f"{self.base_url}/admin/ban",
+                json={"user_id": user_id},
+                headers=headers,
+                proxies=self._proxies,
+                timeout=REQUEST_TIMEOUT,
+            )
+            return r.json().get("ok", False)
+        except Exception:
+            return False
+
+    def admin_unban(self, user_id: int) -> bool:
+        """Unban a user."""
+        headers = self._headers()
+        if hasattr(self, "_admin_session"):
+            headers["Authorization"] = f"Bearer {self._admin_session}"
+        try:
+            r = requests.post(
+                f"{self.base_url}/admin/unban",
                 json={"user_id": user_id},
                 headers=headers,
                 proxies=self._proxies,

@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 APP_DIR = Path(os.environ.get("BATTERY_NOTIFIER_HOME", Path.home() / ".config" / "battery-music-notifier"))
 
 # Default hosted worker URL (users can override or self-host)
-DEFAULT_WORKER_URL = "https://battery-relay.saman-gho-battery.workers.dev"
+DEFAULT_WORKER_URL = "https://battery-relay.your-worker.workers.dev"
 
 # Bundled default alarm sound
 DEFAULT_ALARM_FILE = str(Path(__file__).parent / "assets" / "default_alarm.wav")
@@ -86,6 +86,9 @@ class Config:
     
     # Thief catcher alarm sound (falls back to bundled default)
     alarm_files: List[str] = field(default_factory=lambda: [DEFAULT_ALARM_FILE])
+
+    # Local socket shared secret (optional, prevents LAN attackers from sending STOP)
+    socket_secret: str = ""
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Config":

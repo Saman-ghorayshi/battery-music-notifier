@@ -45,16 +45,17 @@ class ThiefCatcher:
         self._armed = False
         self._alert_active = False
 
-    def arm(self, mode: str = "both", verbose: bool = True) -> None:
+    def arm(self, mode: str = "both", verbose: bool = True, force: bool = False) -> None:
         """Start monitoring for charger unplug.
 
         Args:
             mode: 'local', 'relay', or 'both'
             verbose: print status messages
+            force: arm even if device is not currently charging
         """
         # Read initial state
         info = self.battery.read()
-        if not info.charging:
+        if not info.charging and not force:
             if verbose:
                 print("  [WARN] Device is NOT charging right now!")
                 print("  Plug in your charger first, then arm the thief catcher.")
@@ -71,6 +72,9 @@ class ThiefCatcher:
         self._armed = True
         self._alert_active = False
 
+        # Remember the state at arm time so we can detect unplug-during-grace
+        was_charging_at_arm = info.charging
+
         # Grace period
         grace_end = time.time() + ARM_GRACE_SECONDS
         while time.time() < grace_end and not self._stop_event.is_set():
@@ -80,8 +84,24 @@ class ThiefCatcher:
             self._disarm()
             return
 
+        # Re-read battery AFTER grace period to get true initial state.
+        try:
+            info = self.battery.read()
+            was_charging = info.charging
+        except Exception as e:
+            log.error("Battery read after grace period failed: %s", e)
+            was_charging = True  # Assume still charging to avoid false alarm
+
+        # Detect unplug during grace period: was charging at arm time,
+        # but not charging after grace. The charger was pulled during
+        # the grace window. Trigger immediately, don't wait for the loop.
+        if was_charging_at_arm and not was_charging and not self._alert_active:
+            if verbose:
+                print("  [ALERT] Charger unplugged during grace period!")
+            self._trigger_alert(mode, info.percentage, verbose)
+            self._alert_active = True
+
         # Monitoring loop
-        was_charging = True
         while not self._stop_event.is_set():
             try:
                 info = self.battery.read()
@@ -124,7 +144,7 @@ class ThiefCatcher:
                     print("  [LOCAL] Alarm playing on this device")
 
         # Relay alarm: send to worker, laptop will pick it up
-        if mode in ("relay", "both") and self.worker:
+        if mode == "relay" and self.worker:
             success = self.worker.send_alert(
                 alert_type="THIEF_ALERT",
                 battery_pct=battery_pct,
@@ -135,13 +155,29 @@ class ThiefCatcher:
                     print("  [RELAY] THIEF_ALERT sent to worker, laptop will alarm")
                 else:
                     print("  [RELAY] Failed to send alert to worker")
+            # Local socket fallback (relay-only mode, worker might be down)
+            self._send_local_socket("THIEF_ALERT")
 
-            # Also try local socket (fallback if worker is down)
-            if mode == "both":
-                self._send_local_socket("THIEF_ALERT")
+        elif mode == "both":
+            if self.worker:
+                success = self.worker.send_alert(
+                    alert_type="THIEF_ALERT",
+                    battery_pct=battery_pct,
+                    is_charging=False,
+                )
+                if verbose:
+                    if success:
+                        print("  [RELAY] THIEF_ALERT sent to worker, laptop will alarm")
+                    else:
+                        print("  [RELAY] Failed to send alert to worker")
+            else:
+                if verbose:
+                    print("  [RELAY] No worker configured, using local socket only")
+            # Always try local socket in both mode (fallback if worker is down)
+            self._send_local_socket("THIEF_ALERT")
 
-        # Local socket fallback (relay-only mode without worker)
         elif mode == "relay" and not self.worker:
+            # Relay-only mode with no worker: local socket is the only channel
             self._send_local_socket("THIEF_ALERT")
 
     def _stop_alert(self, mode: str) -> None:
@@ -160,7 +196,8 @@ class ThiefCatcher:
         """Send command via local socket as fallback."""
         try:
             from .connection import send_command_with_ack
-            send_command_with_ack("127.0.0.1", self.local_port, command, timeout=2.0)
+            secret = getattr(self.cfg, 'socket_secret', '') if self.cfg else ''
+            send_command_with_ack("127.0.0.1", self.local_port, command, timeout=2.0, secret=secret)
         except Exception as e:
             log.debug("Local socket send failed: %s", e)
 

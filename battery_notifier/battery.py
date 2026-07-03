@@ -26,7 +26,10 @@ class Battery:
             try:
                 result = subprocess.run(["termux-battery-status"], capture_output=True, text=True, check=True)
                 data = json.loads(result.stdout)
-                is_charging = data.get("status") in ("CHARGING", "FULL")
+                # NOT_CHARGING: charger is connected but battery is not actively
+                # charging (e.g. battery protection/optimized charging on some OEMs).
+                # Treat as charging to avoid false "unplugged" thief-catcher alarms.
+                is_charging = data.get("status") in ("CHARGING", "FULL", "NOT_CHARGING")
                 return BatteryInfo(percentage=int(data.get("percentage", 0)), charging=is_charging)
             except Exception as e:
                 raise RuntimeError(

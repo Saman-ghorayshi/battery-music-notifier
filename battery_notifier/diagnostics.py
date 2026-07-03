@@ -115,22 +115,28 @@ def run_doctor(cfg) -> bool:
     print("\n [6] Network Connectivity")
     proxies = {"http": effective_proxy, "https": effective_proxy} if effective_proxy else {}
 
-    # Google
+    # Google: use GET with stream=True (HEAD can return 405 from some servers)
     try:
-        r = requests.head("https://www.google.com", proxies=proxies, timeout=4)
-        print(f"   Google:          reachable (HTTP {r.status_code})")
+        r = requests.get("https://www.google.com", proxies=proxies, timeout=4, stream=True)
+        if r.status_code < 500:
+            print(f"   Google:          reachable (HTTP {r.status_code})")
+        else:
+            print(f"   Google:          UNREACHABLE (HTTP {r.status_code})")
+            all_clear = False
+        r.close()
     except Exception:
         print("   Google:          UNREACHABLE (offline or proxy broken)")
         all_clear = False
 
-    # Telegram API
+    # Telegram API: use GET with stream=True
     try:
-        r = requests.head("https://api.telegram.org", proxies=proxies, timeout=4)
-        if r.status_code in (200, 302, 404):
+        r = requests.get("https://api.telegram.org", proxies=proxies, timeout=4, stream=True)
+        if r.status_code < 500:
             print(f"   Telegram API:    reachable (HTTP {r.status_code})")
         else:
             print(f"   Telegram API:    unexpected status {r.status_code}")
             all_clear = False
+        r.close()
     except Exception:
         print("   Telegram API:    UNREACHABLE (blocked by firewall/ISP)")
         if not effective_proxy:

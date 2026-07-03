@@ -65,26 +65,31 @@ class RemoteMonitor:
         """Check if cloud internet (Telegram API) is reachable, using proxy if available."""
         proxies = {"http": self.effective_proxy, "https": self.effective_proxy} if self.effective_proxy else None
         try:
-            requests.get("https://api.telegram.org", proxies=proxies, timeout=3.0)
+            r = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.0, stream=True)
+            r.close()
             return True
         except requests.RequestException:
             return False
 
-    def _dispatch_client_web_alerts(self) -> None:
+    def _dispatch_client_web_alerts(self, command: str = "START") -> bool:
         """Send cloud alerts directly from mobile client when local network fails."""
         if not self.cfg:
-            return
+            return False
         proxies = {"http": self.effective_proxy, "https": self.effective_proxy} if self.effective_proxy else None
 
         if self.cfg.telegram_token and self.cfg.telegram_chat_id:
             try:
                 url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/setMyDescription"
-                payload = {"description": "START"}
-                requests.post(url, json=payload, proxies=proxies, timeout=5)
-                print("  [Cloud] Telegram command dispatched via Bot Description")
-                log.info("Client fallback Telegram notification sent.")
+                payload = {"description": command}
+                r = requests.post(url, json=payload, proxies=proxies, timeout=5)
+                r.raise_for_status()
+                print(f"  [Cloud] Telegram command dispatched: {command}")
+                log.info("Client fallback Telegram command sent: %s", command)
+                return True
             except Exception as e:
                 log.error("Cloud fallback failed: %s", e)
+                return False
+        return False
 
     def _print_env_status(self) -> None:
         """Print environment status at startup."""
@@ -159,7 +164,8 @@ class RemoteMonitor:
 
                     if self.resolved_host:
                         success = send_command_with_ack(
-                            self.resolved_host, self.port, "START"
+                            self.resolved_host, self.port, "START",
+                            secret=getattr(self.cfg, 'socket_secret', ''),
                         )
                         if success:
                             is_playing = True
@@ -175,8 +181,15 @@ class RemoteMonitor:
                         # Cloud fallback
                         if self._has_internet():
                             print("  Routing through Telegram cloud fallback...")
-                            self._dispatch_client_web_alerts()
-                            is_playing = True
+                            sent = self._dispatch_client_web_alerts()
+                            if sent:
+                                is_playing = True
+                                # Reset counter so re-discovered connections get
+                                # a clean slate instead of instant-thrashing back
+                                # to cloud on the first failed ACK
+                                connection_lost_count = 0
+                            else:
+                                print("  [WARN] Cloud fallback send failed, will retry next cycle")
                         else:
                             print("  [CRITICAL] No local server and no internet - cannot alert!")
 
@@ -184,12 +197,18 @@ class RemoteMonitor:
                     print(f"  Battery normalized: {pct}% (charging={charging})")
                     if self.resolved_host:
                         success = send_command_with_ack(
-                            self.resolved_host, self.port, "STOP"
+                            self.resolved_host, self.port, "STOP",
+                            secret=getattr(self.cfg, 'socket_secret', ''),
                         )
                         if success:
                             print(f"  [OK] Laptop acknowledged STOP")
                         else:
-                            print("  [WARN] Laptop did not acknowledge STOP, resetting state")
+                            print(f"  [WARN] Laptop did not acknowledge STOP, resetting state")
+                    else:
+                        # Cloud fallback: send STOP via Telegram
+                        if self._has_internet():
+                            print("  Routing STOP through Telegram cloud fallback...")
+                            self._dispatch_client_web_alerts("STOP")
                     is_playing = False
 
             except KeyboardInterrupt:
@@ -247,17 +266,32 @@ class NotificationServer:
                 continue
             try:
                 r = requests.get(f"{base_url}/getMyDescription", proxies=proxies, timeout=5)
-                if r.status_code == 200:
+                if r.status_code == 200 and r.json().get("ok"):
                     desc = r.json().get("result", {}).get("description", "").upper().strip()
                     if desc != last_cmd:
                         if "START" in desc:
                             log.info("Telegram command: START")
                             if self.player: self.player.play()
                             threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
+                            # Clear the description so START can be triggered again later
+                            try:
+                                cr = requests.post(f"{base_url}/setMyDescription", json={"description": ""}, proxies=proxies, timeout=5)
+                                cr.raise_for_status()
+                            except Exception as e:
+                                log.warning("Failed to clear Telegram description after START: %s", e)
+                            last_cmd = ""
                         elif "STOP" in desc:
                             log.info("Telegram command: STOP")
                             if self.player: self.player.stop()
-                        last_cmd = desc
+                            # Clear the description so STOP can be triggered again later
+                            try:
+                                cr = requests.post(f"{base_url}/setMyDescription", json={"description": ""}, proxies=proxies, timeout=5)
+                                cr.raise_for_status()
+                            except Exception as e:
+                                log.warning("Failed to clear Telegram description after STOP: %s", e)
+                            last_cmd = ""
+                        else:
+                            last_cmd = desc
             except Exception:
                 pass
             time.sleep(2)
@@ -273,13 +307,17 @@ class NotificationServer:
             try:
                 url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
                 payload = {"chat_id": self.cfg.telegram_chat_id, "text": "Battery alert: threshold crossed!"}
-                requests.post(url, json=payload, proxies=proxies, timeout=5)
-                log.info("Telegram notification sent.")
+                r = requests.post(url, json=payload, proxies=proxies, timeout=5)
+                if r.status_code == 200 and r.json().get("ok"):
+                    log.info("Telegram notification sent.")
+                else:
+                    log.warning("Telegram send failed: HTTP %s, response: %s", r.status_code, r.text[:200])
             except Exception as e:
                 log.error("Telegram notification failed: %s", e)
 
         # Email
         if self.cfg.email_sender and self.cfg.email_password and self.cfg.email_receiver:
+            smtp_server = None
             try:
                 import smtplib
                 from email.mime.text import MIMEText
@@ -288,38 +326,62 @@ class NotificationServer:
                 msg["From"] = self.cfg.email_sender
                 msg["To"] = self.cfg.email_receiver
                 if self.cfg.email_smtp_port == 465:
-                    server = smtplib.SMTP_SSL(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
+                    smtp_server = smtplib.SMTP_SSL(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
                 else:
-                    server = smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
-                    server.starttls()
-                server.login(self.cfg.email_sender, self.cfg.email_password)
-                server.send_message(msg)
+                    smtp_server = smtplib.SMTP(self.cfg.email_smtp_server, self.cfg.email_smtp_port, timeout=10)
+                    smtp_server.starttls()
+                smtp_server.login(self.cfg.email_sender, self.cfg.email_password)
+                smtp_server.send_message(msg)
                 log.info("Email notification sent.")
             except Exception as e:
                 log.error("Email notification failed: %s", e)
+            finally:
+                if smtp_server is not None:
+                    try:
+                        smtp_server.quit()
+                    except Exception:
+                        try:
+                            smtp_server.close()
+                        except Exception:
+                            pass
 
     def _handle_client(self, conn: socket.socket, addr: tuple) -> None:
         """Handle a single client connection with ACK protocol."""
         try:
+            conn.settimeout(2.0)  # Prevent infinite blocking on empty connections
             data = conn.recv(1024).decode("utf-8").strip()
             if not data:
                 return
 
-            # PING/PONG health check
+            # PING/PONG health check (no auth needed for discovery)
             if data == "PING":
                 conn.sendall(b"PONG")
                 log.debug("PING from %s answered", addr[0])
                 return
 
-            # START/STOP commands
-            if data in ("START", "STOP"):
+            # Shared-secret authentication for commands
+            # If socket_secret is configured, commands must be prefixed with the secret:
+            # Format: "SECRET:START" or "SECRET:THIEF_ALERT"
+            # If no secret is configured, commands are accepted as-is (backward compatible)
+            secret = getattr(self.cfg, 'socket_secret', '') if self.cfg else ''
+            if secret:
+                parts = data.split(":", 1)
+                if len(parts) != 2 or parts[0] != secret:
+                    log.warning("Unauthorized command from %s (bad or missing secret)", addr[0])
+                    conn.sendall(b"ERR:UNAUTHORIZED")
+                    return
+                data = parts[1]
+
+            # START/STOP/THIEF_ALERT/THIEF_STOP commands
+            # THIEF_ALERT and THIEF_STOP are mapped to play/stop for the alarm
+            if data in ("START", "STOP", "THIEF_ALERT", "THIEF_STOP"):
                 log.info("Command %s from %s", data, addr[0])
                 print(f"  [{time.strftime('%H:%M:%S')}] {data} from {addr[0]}")
 
-                if data == "START":
+                if data in ("START", "THIEF_ALERT"):
                     if self.player: self.player.play()
                     threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
-                elif data == "STOP":
+                elif data in ("STOP", "THIEF_STOP"):
                     if self.player: self.player.stop()
 
                 # Send ACK confirmation back to client
@@ -431,6 +493,6 @@ def discover_server_ip(timeout: float = 5.0) -> str | None:
     return None
 
 
-def send_notification(host: str, port: int, command: str) -> bool:
+def send_notification(host: str, port: int, command: str, secret: str = "") -> bool:
     """Send command to server. Uses ACK protocol if server supports it."""
-    return send_command_with_ack(host, port, command, timeout=5.0)
+    return send_command_with_ack(host, port, command, timeout=5.0, secret=secret)
