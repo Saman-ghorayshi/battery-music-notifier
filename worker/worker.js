@@ -56,6 +56,15 @@ function cleanRateBuckets() {
   }
 }
 
+// Clean expired admin sessions from D1 (called periodically on alert)
+async function cleanExpiredSessions(db) {
+  try {
+    await db.prepare("DELETE FROM admin_sessions WHERE expires_at < ?").bind(now()).run();
+  } catch (e) {
+    // Non-critical, ignore
+  }
+}
+
 // ---- Response helpers ----
 
 function json(data, status = 200) {
@@ -85,8 +94,11 @@ async function authUser(request, db) {
   if (!authHeader.startsWith(AUTH_PREFIX)) return null;
   const token = authHeader.slice(AUTH_PREFIX.length).trim();
   if (!token || token.length < 16) return null;
-  const user = await db.prepare("SELECT * FROM users WHERE token = ? AND is_banned = 0").bind(token).first();
-  return user || null;
+  // Don't filter is_banned in SQL — return "banned" so the client gets a clear error
+  const user = await db.prepare("SELECT * FROM users WHERE token = ?").bind(token).first();
+  if (!user) return null;
+  if (user.is_banned) return "banned";
+  return user;
 }
 
 // ---- Admin auth: session key derived from ADMIN_KEY env var ----
@@ -95,9 +107,9 @@ async function adminAuth(request, db) {
   const authHeader = request.headers.get("Authorization") || "";
   const key = authHeader.replace(AUTH_PREFIX, "").trim();
   if (!key) return false;
-  const hashed = await sha256(key + "admin_salt");
+  // Look up the session key directly — handleAdminLogin stores it already hashed
   const session = await db.prepare("SELECT * FROM admin_sessions WHERE session_key = ? AND expires_at > ?")
-    .bind(hashed, now()).first();
+    .bind(key, now()).first();
   return !!session;
 }
 
@@ -135,6 +147,7 @@ async function handleSendAlert(request, db, user, env) {
     return json({ ok: false, error: "rate_limited" }, 429);
   }
   cleanRateBuckets();
+  cleanExpiredSessions(db);
   const batteryPct = typeof body.battery_pct === "number" ? body.battery_pct : -1;
   const isCharging = body.is_charging ? 1 : 0;
   const t = now();
@@ -148,10 +161,14 @@ async function handleSendAlert(request, db, user, env) {
     "INSERT INTO events (user_id, event_type, payload, ts) VALUES (?, ?, ?, ?)"
   ).bind(user.user_id, alertType, JSON.stringify({ battery_pct: batteryPct, charging: isCharging }), t).run();
 
-  // Trim old events
-  await db.prepare(
-    "DELETE FROM events WHERE user_id = ? AND event_id NOT IN (SELECT event_id FROM events WHERE user_id = ? ORDER BY event_id DESC LIMIT ?)"
-  ).bind(user.user_id, user.user_id, MAX_EVENTS_PER_USER).run();
+  // Trim old events (only if count exceeds limit — avoids heavy subquery on every alert)
+  const eventCount = await db.prepare("SELECT COUNT(*) as cnt FROM events WHERE user_id = ?").bind(user.user_id).first();
+  if (eventCount.cnt > MAX_EVENTS_PER_USER) {
+    const excess = eventCount.cnt - MAX_EVENTS_PER_USER;
+    await db.prepare(
+      "DELETE FROM events WHERE event_id IN (SELECT event_id FROM events WHERE user_id = ? ORDER BY event_id ASC LIMIT ?)"
+    ).bind(user.user_id, excess).run();
+  }
 
   return json({ ok: true, alert_active: 1, alert_type: alertType });
 }
@@ -178,6 +195,10 @@ async function handlePoll(request, db, user) {
 // ---- Admin endpoints ----
 
 async function handleAdminLogin(request, db, env) {
+  // Guard: if ADMIN_KEY secret is not configured, don't allow login
+  if (!env.ADMIN_KEY || env.ADMIN_KEY.length < 10) {
+    return json({ ok: false, error: "admin_key_not_configured" }, 500);
+  }
   const body = await request.json().catch(() => ({}));
   const adminKey = body.admin_key || "";
   if (!adminKey || adminKey.length < 10) {
@@ -204,7 +225,7 @@ async function handleAdminStats(db) {
   const pro = await db.prepare("SELECT COUNT(*) as cnt FROM users WHERE is_pro = 1").first();
   const founding = await db.prepare("SELECT COUNT(*) as cnt FROM users WHERE is_founding = 1").first();
   const totalAlerts = await db.prepare("SELECT SUM(total_alerts) as cnt FROM users").first();
-  const recentUsers = await db.prepare("SELECT * FROM users ORDER BY last_seen DESC LIMIT 50").all();
+  const recentUsers = await db.prepare("SELECT user_id, device_name, platform, last_seen, is_banned, alert_active, alert_type, alert_ts, battery_pct, is_charging, total_alerts, is_pro, is_founding FROM users ORDER BY last_seen DESC LIMIT 50").all();
   return json({
     ok: true,
     stats: {
@@ -321,8 +342,14 @@ function dashboardHTML(data) {
 }
 
 async function handleAdminDashboard(request, db) {
+  const authHeader = request.headers.get("Authorization") || "";
   const isAuthed = await adminAuth(request, db);
   if (!isAuthed) {
+    // If the request carries a Bearer token that failed, return 401
+    // so the frontend can detect token expiry and clear localStorage
+    if (authHeader.startsWith(AUTH_PREFIX)) {
+      return json({ ok: false, error: "unauthorized" }, 401);
+    }
     return html(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Admin Login</title>
 <style>body{font-family:monospace;background:#1a1a2e;color:#e0e0e0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
 input{padding:12px;width:300px;font-size:16px;background:#16213e;color:#e0e0e0;border:1px solid #30475e;border-radius:4px}
@@ -332,6 +359,17 @@ button{padding:12px 24px;font-size:16px;background:#00d4ff;color:#1a1a2e;border:
 <input id="key" type="password" placeholder="Admin key" onkeydown="if(event.key==='Enter')login()"><br>
 <button onclick="login()">Login</button></div>
 <script>
+// 1. Check if we already have a session key saved from a successful login
+const sk = localStorage.getItem('sk');
+if (sk) {
+  fetch('/admin', { headers: { 'Authorization': 'Bearer ' + sk } })
+  .then(r => {
+    if (r.ok) { r.text().then(html => { document.open(); document.write(html); document.close(); }); }
+    else { localStorage.removeItem('sk'); } // Key expired or invalid, clear it
+  });
+}
+
+// 2. The standard login function
 function login(){
   fetch('/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_key:document.getElementById('key').value})})
   .then(r=>r.json()).then(d=>{if(d.ok){localStorage.setItem('sk',d.session_key);location.reload()}else{alert('Invalid key')}});
@@ -359,17 +397,24 @@ export default {
 
     // ---- Public API ----
     if (path === "/api/register" && request.method === "POST") return handleRegister(request, db);
-    if (path === "/api/ping" && request.method === "POST") return authUser(request, db).then(u => u ? handlePing(request, db, u) : json({ ok: false, error: "unauthorized" }, 401));
+    if (path === "/api/ping" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      return u ? handlePing(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
     if (path === "/api/alert" && request.method === "POST") {
       const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       return u ? handleSendAlert(request, db, u, env) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/clear" && request.method === "POST") {
       const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       return u ? handleClearAlert(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/poll" && request.method === "GET") {
       const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       return u ? handlePoll(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
 

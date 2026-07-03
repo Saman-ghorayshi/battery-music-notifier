@@ -81,7 +81,8 @@ other requests are unlimited.
 - 24-byte random tokens (Web Crypto API)
 - Bearer auth on every API call
 - Rate limiting: 30 req/min/user (hosted only, THIEF_ALERT exempt)
-- Admin sessions: SHA-256 hashed, 1-hour TTL
+- Admin sessions: SHA-256 hashed, 1-hour TTL, expired sessions auto-cleaned from D1
+- Admin stats API excludes the `token` column -- user auth tokens are never exposed in dashboard data
 - Banned users blocked at auth layer
 - D1 database (SQLite, scales to 10k-50k users)
 - Event log bounded at 200 events per user

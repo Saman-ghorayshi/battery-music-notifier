@@ -235,7 +235,7 @@ def test_send_notification_uses_ack(mock_send_ack):
     """send_notification delegates to send_command_with_ack."""
     mock_send_ack.return_value = True
     assert send_notification("127.0.0.1", 8000, "START") is True
-    mock_send_ack.assert_called_with("127.0.0.1", 8000, "START", timeout=5.0)
+    mock_send_ack.assert_called_with("127.0.0.1", 8000, "START", timeout=5.0, secret="")
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ def test_remote_monitor_loop_charging_alert_with_ack(mock_send, mock_read, mock_
 
     monitor.run()
 
-    mock_send.assert_called_with("127.0.0.1", 8000, "START")
+    mock_send.assert_called_with("127.0.0.1", 8000, "START", secret="")
 
 
 @patch("time.sleep")
@@ -326,7 +326,7 @@ def test_remote_monitor_loop_discharging_alert_with_ack(mock_send, mock_read, mo
 
     monitor.run()
 
-    mock_send.assert_called_with("127.0.0.1", 8000, "START")
+    mock_send.assert_called_with("127.0.0.1", 8000, "START", secret="")
 
 
 @patch("time.sleep")
