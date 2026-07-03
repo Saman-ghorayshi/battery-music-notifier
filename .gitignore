@@ -6,3 +6,6 @@ build/
 dist/
 .venv/
 config.toml
+*.wrangler/
+*node_modules/
+*config.toml
