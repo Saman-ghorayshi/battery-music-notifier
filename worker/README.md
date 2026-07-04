@@ -17,7 +17,7 @@ get through immediately, even if the user has been polling heavily.
 cd worker/
 npx wrangler d1 create battery-relay-db
 # Copy database_id into wrangler.toml
-npx wrangler d1 execute battery-relay-db --file=schema.sql
+npx wrangler d1 execute battery-relay-db --file=schema.sql --remote
 npx wrangler secret put ADMIN_KEY    # Set a long random secret
 npx wrangler deploy
 ```
@@ -42,7 +42,7 @@ Users deploy their own worker. No rate limiting, full control, private data.
 cd worker/self-hosted/
 # Edit wrangler.toml: set database_id, change ADMIN_KEY
 npx wrangler d1 create battery-relay-db-private
-npx wrangler d1 execute battery-relay-db-private --file=../schema.sql
+npx wrangler d1 execute battery-relay-db-private --file=../schema.sql --remote
 npx wrangler secret put ADMIN_KEY
 npx wrangler deploy
 ```
