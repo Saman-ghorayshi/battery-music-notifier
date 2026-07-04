@@ -35,29 +35,30 @@ class WorkerClient:
     def _post(self, path: str, payload: dict) -> dict:
         try:
             r = requests.post(
-                f"{self.base_url}{path}",
-                json=payload,
-                headers=self._headers(),
-                proxies=self._proxies,
-                timeout=REQUEST_TIMEOUT,
+                f"{self.base_url}{path}", json=payload,
+                headers=self._headers(), proxies=self._proxies, timeout=REQUEST_TIMEOUT,
             )
+            if r.status_code >= 400:
+                try: return r.json()
+                except ValueError: return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
             return r.json()
-        except Exception as e:
-            log.error("Worker POST %s failed: %s", path, e)
-            return {"ok": False, "error": str(e)}
+        except requests.Timeout: return {"ok": False, "error": "timeout"}
+        except requests.ConnectionError as e: return {"ok": False, "error": f"connection_failed: {e}"}
+        except Exception as e: return {"ok": False, "error": str(e)}
 
     def _get(self, path: str) -> dict:
         try:
             r = requests.get(
-                f"{self.base_url}{path}",
-                headers=self._headers(),
-                proxies=self._proxies,
-                timeout=REQUEST_TIMEOUT,
+                f"{self.base_url}{path}", headers=self._headers(),
+                proxies=self._proxies, timeout=REQUEST_TIMEOUT,
             )
+            if r.status_code >= 400:
+                try: return r.json()
+                except ValueError: return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
             return r.json()
-        except Exception as e:
-            log.error("Worker GET %s failed: %s", path, e)
-            return {"ok": False, "error": str(e)}
+        except requests.Timeout: return {"ok": False, "error": "timeout"}
+        except requests.ConnectionError as e: return {"ok": False, "error": f"connection_failed: {e}"}
+        except Exception as e: return {"ok": False, "error": str(e)}
 
     # ---- Public API ----
 

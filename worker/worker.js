@@ -381,7 +381,34 @@ function login(){
   const data = await statsData.json();
   return html(dashboardHTML(data));
 }
+// ---- Pairing System ----
 
+async function handlePairGenerate(request, db, user) {
+  // Generate a random 6-digit string
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = now() + 300; // 5 minutes from now
+  
+  await db.prepare("INSERT INTO pairing_codes (code, token, expires_at) VALUES (?, ?, ?)")
+    .bind(code, user.token, expiresAt).run();
+    
+  return json({ ok: true, code: code, expires_in: 300 });
+}
+
+async function handlePairLink(request, db) {
+  const body = await request.json().catch(() => ({}));
+  const code = body.code;
+  if (!code || code.length !== 6) return json({ ok: false, error: "invalid_code" }, 400);
+
+  const record = await db.prepare("SELECT * FROM pairing_codes WHERE code = ? AND expires_at > ?")
+    .bind(code, now()).first();
+    
+  if (!record) return json({ ok: false, error: "invalid_or_expired" }, 404);
+
+  // Single-use: Delete the code immediately so it can't be reused
+  await db.prepare("DELETE FROM pairing_codes WHERE code = ?").bind(code).run();
+
+  return json({ ok: true, token: record.token });
+}
 // ---- Main router ----
 
 export default {
@@ -396,7 +423,19 @@ export default {
     }
 
     // ---- Public API ----
+        // ---- Public API ----
     if (path === "/api/register" && request.method === "POST") return handleRegister(request, db);
+    
+    // 6-Digit Pairing System
+    if (path === "/api/pair/generate" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      return u ? handlePairGenerate(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    if (path === "/api/pair/link" && request.method === "POST") {
+      return handlePairLink(request, db);
+    }
+
     if (path === "/api/ping" && request.method === "POST") {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
@@ -417,7 +456,6 @@ export default {
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       return u ? handlePoll(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
-
     // ---- Admin API ----
     if (path === "/admin/login" && request.method === "POST") return handleAdminLogin(request, db, env);
     if (path === "/admin" || path === "/admin/") {

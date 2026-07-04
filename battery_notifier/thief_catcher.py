@@ -106,11 +106,15 @@ class ThiefCatcher:
             self._alert_active = True
 
         # Monitoring loop
+        consecutive_read_failures = 0
+        MAX_READ_FAILURES = 5
+
         while not self._stop_event.is_set():
             try:
                 info = self.battery.read()
                 now_charging = info.charging
-
+                consecutive_read_failures = 0
+                
                 # Detect unplug: was charging, now not
                 if was_charging and not now_charging and not self._alert_active:
                     self._trigger_alert(mode, info.percentage, verbose)
@@ -124,69 +128,45 @@ class ThiefCatcher:
                     self._alert_active = False
 
                 was_charging = now_charging
-
+                
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                log.error("Thief catcher loop error: %s", e)
-
+                consecutive_read_failures += 1
+                log.error("Thief catcher loop error (%d): %s", consecutive_read_failures, e)
+                if consecutive_read_failures >= MAX_READ_FAILURES:
+                    print(f"  [CRITICAL] Battery read failed {consecutive_read_failures} times!")
+                    print("  Thief catcher is BLIND. Triggering failsafe alarm.")
+                    if not self._alert_active:
+                        self._trigger_alert(mode, -1, verbose=True)
+                        self._alert_active = True
+            
             time.sleep(POLL_INTERVAL)
 
         self._disarm()
 
     def _trigger_alert(self, mode: str, battery_pct: int, verbose: bool = True) -> None:
-        """Fire the alert through all configured channels."""
         if verbose:
             print(f"\n  !!! CHARGER UNPLUGGED !!! Battery: {battery_pct}%")
-            print("  Triggering alarm...\n")
 
-        # Local alarm: play sound on this device
         if mode in ("local", "both"):
-            if self.player:
-                self.player.play()
-                if verbose:
-                    print("  [LOCAL] Alarm playing on this device")
+            if self.player: self.player.play()
 
-        # Telegram-only mode: send via bot description (no worker, no socket)
         if mode == "telegram":
             self._send_telegram_alert("THIEF_ALERT", verbose)
             return
 
-        # Relay alarm: send to worker, laptop will pick it up
-        if mode == "relay" and self.worker:
-            success = self.worker.send_alert(
-                alert_type="THIEF_ALERT",
-                battery_pct=battery_pct,
-                is_charging=False,
+        # Bug #2 Fix: Only send local socket if worker fails or doesn't exist
+        worker_ok = False
+        if mode in ("relay", "both") and self.worker:
+            worker_ok = self.worker.send_alert(
+                alert_type="THIEF_ALERT", battery_pct=battery_pct, is_charging=False,
             )
             if verbose:
-                if success:
-                    print("  [RELAY] THIEF_ALERT sent to worker, laptop will alarm")
-                else:
-                    print("  [RELAY] Failed to send alert to worker")
-            # Local socket fallback (relay-only mode, worker might be down)
-            self._send_local_socket("THIEF_ALERT")
-
-        elif mode == "both":
-            if self.worker:
-                success = self.worker.send_alert(
-                    alert_type="THIEF_ALERT",
-                    battery_pct=battery_pct,
-                    is_charging=False,
-                )
-                if verbose:
-                    if success:
-                        print("  [RELAY] THIEF_ALERT sent to worker, laptop will alarm")
-                    else:
-                        print("  [RELAY] Failed to send alert to worker")
-            else:
-                if verbose:
-                    print("  [RELAY] No worker configured, using local socket only")
-            # Always try local socket in both mode (fallback if worker is down)
-            self._send_local_socket("THIEF_ALERT")
-
-        elif mode == "relay" and not self.worker:
-            # Relay-only mode with no worker: local socket is the only channel
+                print("  [RELAY] sent" if worker_ok else "  [RELAY] failed")
+        
+        # Fallback to local socket ONLY if worker failed
+        if not worker_ok:
             self._send_local_socket("THIEF_ALERT")
 
     def _stop_alert(self, mode: str) -> None:
@@ -224,13 +204,21 @@ class ThiefCatcher:
                 print(f"  [TELEGRAM] Failed to send {command}: {e}")
 
     def _send_local_socket(self, command: str) -> None:
-        """Send command via local socket as fallback."""
-        try:
-            from .connection import send_command_with_ack
-            secret = getattr(self.cfg, 'socket_secret', '') if self.cfg else ''
-            send_command_with_ack("127.0.0.1", self.local_port, command, timeout=2.0, secret=secret)
-        except Exception as e:
-            log.debug("Local socket send failed: %s", e)
+        """Send command via local socket. Tries discovered server, falls back to localhost."""
+        from .connection import send_command_with_ack, ping_server, load_cached_host
+        
+        secret = getattr(self.cfg, 'socket_secret', '') if self.cfg else ''
+        
+        # Bug #3 Fix: Don't just hit 127.0.0.1, try the laptop's actual IP
+        targets = []
+        cached = load_cached_host()
+        if cached: targets.append(cached)
+        targets.append("127.0.0.1") 
+        
+        for host in targets:
+            if ping_server(host, self.local_port, timeout=1.0):
+                send_command_with_ack(host, self.local_port, command, timeout=2.0, secret=secret)
+                return
 
     def _disarm(self) -> None:
         """Disarm and clean up."""

@@ -88,9 +88,14 @@ class RemoteMonitor:
                 payload = {"description": command}
                 r = requests.post(url, json=payload, proxies=proxies, timeout=5)
                 r.raise_for_status()
-                print(f"  [Cloud] Telegram command dispatched: {command}")
-                log.info("Client fallback Telegram command sent: %s", command)
-                return True
+                resp = r.json()
+                if resp.get("ok"):
+                    print(f"  [Cloud] Telegram command dispatched: {command}")
+                    log.info("Client fallback Telegram command sent: %s", command)
+                    return True
+                else:
+                    log.error("Telegram API returned ok=false: %s", resp.get("description", "unknown"))
+                    return False
             except Exception as e:
                 log.error("Cloud fallback failed: %s", e)
                 return False
@@ -122,7 +127,13 @@ class RemoteMonitor:
 
     def run(self) -> None:
         self._print_env_status()
-
+        
+        # ADB Forward Fix: If desktop is client and phone is server, setup forward bridge
+        use_local = self.conn_mode in ("auto", "local")
+        if use_local and (self.env.is_windows or self.env.is_macos or self.env.is_linux):
+            print("  [Desktop Client] Checking for USB ADB bridge to phone...")
+            auto_setup_usb_bridge(mode="forward", port=self.port, max_retries=3)
+            
         # In telegram mode, skip local discovery entirely
         if self.conn_mode == "telegram":
             print("  Telegram-only mode: skipping local server discovery.")
@@ -293,26 +304,24 @@ class NotificationServer:
                 if r.status_code == 200 and r.json().get("ok"):
                     desc = r.json().get("result", {}).get("description", "").upper().strip()
                     if desc != last_cmd:
-                        if "START" in desc:
-                            log.info("Telegram command: START")
+                        if desc in ("START", "THIEF_ALERT"):  # Bug #5 Fix: exact match
+                            log.info("Telegram command: %s", desc)
                             if self.player: self.player.play()
                             threading.Thread(target=self._dispatch_web_alerts, daemon=True).start()
-                            # Clear the description so START can be triggered again later
                             try:
                                 cr = requests.post(f"{base_url}/setMyDescription", json={"description": ""}, proxies=proxies, timeout=5)
                                 cr.raise_for_status()
                             except Exception as e:
-                                log.warning("Failed to clear Telegram description after START: %s", e)
+                                log.warning("Failed to clear Telegram description: %s", e)
                             last_cmd = ""
-                        elif "STOP" in desc:
-                            log.info("Telegram command: STOP")
+                        elif desc in ("STOP", "THIEF_STOP"):  # Bug #5 Fix: exact match
+                            log.info("Telegram command: %s", desc)
                             if self.player: self.player.stop()
-                            # Clear the description so STOP can be triggered again later
                             try:
                                 cr = requests.post(f"{base_url}/setMyDescription", json={"description": ""}, proxies=proxies, timeout=5)
                                 cr.raise_for_status()
                             except Exception as e:
-                                log.warning("Failed to clear Telegram description after STOP: %s", e)
+                                log.warning("Failed to clear Telegram description: %s", e)
                             last_cmd = ""
                         else:
                             last_cmd = desc
@@ -389,12 +398,13 @@ class NotificationServer:
             # If no secret is configured, commands are accepted as-is (backward compatible)
             secret = getattr(self.cfg, 'socket_secret', '') if self.cfg else ''
             if secret:
-                parts = data.split(":", 1)
-                if len(parts) != 2 or parts[0] != secret:
+                # Bug #18 Fix: Use startswith to handle colons in secret
+                if data.startswith(secret + ":"):
+                    data = data[len(secret) + 1:]
+                else:
                     log.warning("Unauthorized command from %s (bad or missing secret)", addr[0])
                     conn.sendall(b"ERR:UNAUTHORIZED")
                     return
-                data = parts[1]
 
             # START/STOP/THIEF_ALERT/THIEF_STOP commands
             # THIEF_ALERT and THIEF_STOP are mapped to play/stop for the alarm

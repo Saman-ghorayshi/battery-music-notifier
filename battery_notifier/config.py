@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 APP_DIR = Path(os.environ.get("BATTERY_NOTIFIER_HOME", Path.home() / ".config" / "battery-music-notifier"))
 
 # Default hosted worker URL (users can override or self-host)
-DEFAULT_WORKER_URL = "https://battery-relay.saman-gho-battery.workers.dev/"
+DEFAULT_WORKER_URL = "https://battery-relay.your-worker.workers.dev"
 
 # Bundled default alarm sound
 DEFAULT_ALARM_FILE = str(Path(__file__).parent / "assets" / "default_alarm.wav")
@@ -62,7 +62,7 @@ class Config:
     min_percentage: int = 20
     max_percentage: int = 100
     volume: float = 0.8
-    poll_interval: float = 3.0
+    poll_interval: float = 10.0  # CHANGED: 3.0 -> 10.0 to protect CF free tier
     annoying: bool = False
     quiet_hours: list[int] = field(default_factory=lambda: [22, 8])
     log_file: Optional[Path] = None
@@ -98,10 +98,22 @@ class Config:
         if path.exists():
             with path.open("rb") as f:
                 data = tomllib.load(f).get("battery_notifier", {})
+            
+            # Type-safe field assignment (Bug #6 Fix)
+            type_hints = {f.name: f.type for f in cls.__dataclass_fields__.values()}
             for k, v in data.items():
-                if hasattr(cfg, k): 
-                    setattr(cfg, k, v)
+                if not hasattr(cfg, k): continue
+                expected = type_hints.get(k)
+                try:
+                    if expected is float and isinstance(v, (int, float)): setattr(cfg, k, float(v))
+                    elif expected is int and isinstance(v, (int, float)): setattr(cfg, k, int(v))
+                    elif expected is bool and isinstance(v, bool): setattr(cfg, k, v)
+                    elif expected is str and isinstance(v, str): setattr(cfg, k, v)
+                    elif expected is list and isinstance(v, list): setattr(cfg, k, v)
+                    elif expected is Optional[Path] and isinstance(v, str): setattr(cfg, k, Path(v))
+                    else: log.warning("Config field '%s' has unexpected type %s, keeping default", k, type(v).__name__)
+                except (ValueError, TypeError) as e:
+                    log.warning("Config field '%s' value %r invalid (%s), keeping default", k, v, e)
         
-        # Smart Auto-Correction Layer: Clean the proxy string natively upon ingestion
         cfg.proxy_url = sanitize_proxy_url(cfg.proxy_url)
         return cfg

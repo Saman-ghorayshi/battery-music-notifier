@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import sys
 import logging
+import re
 from pathlib import Path
 from .config import Config, APP_DIR, DEFAULT_WORKER_URL, DEFAULT_ALARM_FILE
 from .logs import setup_logging
@@ -12,25 +13,20 @@ log = logging.getLogger(__name__)
 
 
 def _save_worker_token(token: str) -> None:
-    """Save the worker token into the config file for future sessions."""
     try:
-        import tomllib
-        import re
         cfg_path = APP_DIR / "config.toml"
-        if not cfg_path.exists():
-            return
+        if not cfg_path.exists(): return
         content = cfg_path.read_text()
+        # Bug #1 Fix: Use lambda to prevent regex injection from token backslashes
         if 'worker_token' in content:
-            # Replace existing token (space-tolerant regex handles "worker_token=value" too)
             content = re.sub(
                 r'worker_token\s*=\s*"[^"]*"',
-                f'worker_token = "{token}"',
+                lambda m: f'worker_token = "{token}"',
                 content,
             )
         else:
             content += f'\nworker_token = "{token}"\n'
         cfg_path.write_text(content)
-        log.info("Worker token saved to config.")
     except Exception as e:
         log.warning("Failed to save worker token: %s", e)
 
@@ -67,6 +63,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--annoying", action="store_true")
     run.add_argument("-v", "--verbose", action="store_true")
     run.add_argument("--config", type=Path)
+
+    # Pairing commands (Other AI's Vision)
+    pair = sub.add_parser("pair", help="Generate a 6-digit code to link another device.")
+    pair.add_argument("--config", type=Path)
+
+    link = sub.add_parser("link", help="Link this device to an existing one using a 6-digit code.")
+    link.add_argument("code", help="The 6-digit pairing code")
+    link.add_argument("--config", type=Path)
 
     sub.add_parser("battery", help="Print current battery info and exit.")
     sub.add_parser("doctor", help="Scan local machine configurations and system hooks for conflicts.")
@@ -546,7 +550,7 @@ socket_secret = "{esc(socket_secret)}"
                     print("  [ERROR] Worker unreachable after 10 attempts. Check network and worker URL.")
                     print("  Continuing to retry every 2s...")
 
-            _time.sleep(2)
+            _time.sleep(cfg.poll_interval)  # Bug #4 Fix: Respect config
         return 0
 
     # admin: admin actions
@@ -648,6 +652,41 @@ socket_secret = "{esc(socket_secret)}"
             print(f"  Clear all alerts: {'OK' if ok else 'FAILED'}")
             return 0 if ok else 1
 
+        return 0
+
+    # Logic for pair and link
+    if args.cmd == "pair":
+        from .worker_client import WorkerClient
+        if not cfg.worker_url or not cfg.worker_token:
+            print("  [ERROR] No worker URL or token configured. Run 'battery-music init' first.")
+            return 2
+        worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+        resp = worker._post("/api/pair/generate", {})
+        if resp.get("ok"):
+            code = resp["code"]
+            print("\n  ========================================")
+            print(f"  Pairing Code: {code}")
+            print("  ========================================")
+            print("  Run this command on your other device within 5 minutes:")
+            print(f"    battery-music link {code}")
+        else:
+            print(f"  [ERROR] Failed to generate code: {resp.get('error')}")
+        return 0
+
+    if args.cmd == "link":
+        from .worker_client import WorkerClient
+        if not cfg.worker_url:
+            print("  [ERROR] No worker_url configured.")
+            return 2
+        worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+        resp = worker._post("/api/pair/link", {"code": args.code})
+        if resp.get("ok"):
+            token = resp["token"]
+            cfg.worker_token = token
+            _save_worker_token(token)
+            print(f"  [OK] Device linked successfully! Token saved.")
+        else:
+            print(f"  [ERROR] Linking failed: {resp.get('error')}")
         return 0
 
     # run: standalone local mode

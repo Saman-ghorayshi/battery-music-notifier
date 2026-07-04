@@ -143,6 +143,16 @@ class Player:
             import sounddevice as sd
             sd.stop()
         except Exception: pass
+        
+        # Bug #8 Fix: Explicitly kill termux media player
+        import shutil
+        if shutil.which("termux-media-player"):
+            try:
+                import subprocess
+                subprocess.run(["termux-media-player", "stop"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            except Exception: pass
+            
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
         self._playing = False
