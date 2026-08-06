@@ -469,10 +469,14 @@ class NotificationServer:
             print("  Telegram cloud polling active")
             self._telegram_thread = threading.Thread(target=self._poll_telegram, daemon=True)
             self._telegram_thread.start()
-        elif use_telegram and not self.cfg.telegram_token:
+        elif self.conn_mode == "telegram" and not self.cfg.telegram_token:
+            # Only fatal if telegram-only mode
             print("  [ERROR] Telegram mode selected but no telegram_token configured.")
             print("  Run 'battery-music init' and enter a Telegram bot token.")
             return
+        elif use_telegram and not self.cfg.telegram_token:
+            # Auto mode without token: skip Telegram, local still works
+            print("  Telegram unavailable (no token). Local mode active.")
 
         # Socket binding (local modes only)
         if use_local:
