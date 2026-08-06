@@ -299,7 +299,7 @@ def test_remote_monitor_loop_charging_alert_with_ack(mock_send, mock_read, mock_
     mock_send.return_value = True
     mock_resolve.return_value = "127.0.0.1"
 
-    with patch("battery_notifier.adb_helper.auto_setup_usb_bridge"):
+    with patch("battery_notifier.remote.auto_setup_usb_bridge"):
         monitor = RemoteMonitor(mock_config, "127.0.0.1", 8000)
         monitor.resolved_host = "127.0.0.1"
         mock_sleep.side_effect = lambda x: monitor._stop_event.set()
@@ -321,7 +321,7 @@ def test_remote_monitor_loop_discharging_alert_with_ack(mock_send, mock_read, mo
     mock_send.return_value = True
     mock_resolve.return_value = "127.0.0.1"
 
-    with patch("battery_notifier.adb_helper.auto_setup_usb_bridge"):
+    with patch("battery_notifier.remote.auto_setup_usb_bridge"):
         monitor = RemoteMonitor(mock_config, "127.0.0.1", 8000)
         monitor.resolved_host = "127.0.0.1"
         mock_sleep.side_effect = lambda x: monitor._stop_event.set()
