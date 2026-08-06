@@ -6,6 +6,7 @@ import json
 import time
 import logging
 import requests
+from requests.exceptions import Timeout, ConnectionError as ReqConnError
 from typing import Optional
 from .connection import get_effective_proxy
 
@@ -42,8 +43,8 @@ class WorkerClient:
                 try: return r.json()
                 except ValueError: return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
             return r.json()
-        except requests.Timeout: return {"ok": False, "error": "timeout"}
-        except requests.ConnectionError as e: return {"ok": False, "error": f"connection_failed: {e}"}
+        except Timeout: return {"ok": False, "error": "timeout"}
+        except ReqConnError as e: return {"ok": False, "error": f"connection_failed: {e}"}
         except Exception as e: return {"ok": False, "error": str(e)}
 
     def _get(self, path: str) -> dict:
@@ -56,8 +57,8 @@ class WorkerClient:
                 try: return r.json()
                 except ValueError: return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
             return r.json()
-        except requests.Timeout: return {"ok": False, "error": "timeout"}
-        except requests.ConnectionError as e: return {"ok": False, "error": f"connection_failed: {e}"}
+        except Timeout: return {"ok": False, "error": "timeout"}
+        except ReqConnError as e: return {"ok": False, "error": f"connection_failed: {e}"}
         except Exception as e: return {"ok": False, "error": str(e)}
 
     # ---- Public API ----

@@ -442,7 +442,10 @@ def test_proxy_detection_verifies_socks5():
 
 def test_config_loads_windows_path(tmp_path):
     """Config.load should handle Windows paths with escaped backslashes in TOML."""
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
 
     cfg_file = tmp_path / "config.toml"
     cfg_file.write_text(

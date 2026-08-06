@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="battery-music",
         description="Play music when battery reaches target.",
     )
-    p.add_argument("-V", "--version", action="version", version="%(prog)s 1.2.0")
+    p.add_argument("-V", "--version", action="version", version="%(prog)s 1.0.0")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # start: one-command auto-detect (the smart entry point)

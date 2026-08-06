@@ -56,6 +56,27 @@ def sanitize_proxy_url(url: str) -> str:
     return url
 
 
+def _resolve_annotation(ann):
+    """Resolve a string annotation to a real type. E.g. 'float' -> float."""
+    if ann is None:
+        return None
+    if isinstance(ann, type):
+        return ann
+    if isinstance(ann, str):
+        # builtins
+        builtins_map = {"int": int, "float": float, "str": str, "bool": bool, "list": list, "dict": dict}
+        if ann in builtins_map:
+            return builtins_map[ann]
+        # Optional[...] is Union[...] when stringified
+        if ann.startswith("Optional["):
+            inner = ann[9:-1]
+            return _resolve_annotation(inner)
+        # List[...]  
+        if ann.startswith("List["):
+            return list
+    return ann
+
+
 @dataclass
 class Config:
     music_files: List[str] = field(default_factory=list)
@@ -92,18 +113,23 @@ class Config:
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Config":
-        import tomllib
         cfg = cls()
         path = path or (APP_DIR / "config.toml")
         if path.exists():
-            with path.open("rb") as f:
-                data = tomllib.load(f).get("battery_notifier", {})
+            try:
+                import tomllib
+                with path.open("rb") as f:
+                    data = tomllib.load(f).get("battery_notifier", {})
+            except ModuleNotFoundError:
+                import tomli
+                with path.open("rb") as f:
+                    data = tomli.load(f).get("battery_notifier", {})
             
             # Type-safe field assignment (Bug #6 Fix)
             type_hints = {f.name: f.type for f in cls.__dataclass_fields__.values()}
             for k, v in data.items():
                 if not hasattr(cfg, k): continue
-                expected = type_hints.get(k)
+                expected = _resolve_annotation(type_hints.get(k))
                 try:
                     if expected is float and isinstance(v, (int, float)): setattr(cfg, k, float(v))
                     elif expected is int and isinstance(v, (int, float)): setattr(cfg, k, int(v))

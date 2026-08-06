@@ -31,6 +31,7 @@ def test_worker_register_success(mock_requests, mock_config):
     from battery_notifier.worker_client import WorkerClient
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"ok": True, "token": "newtoken123", "user_id": 1}
     mock_requests.post.return_value = mock_resp
 
@@ -47,6 +48,7 @@ def test_worker_register_failure(mock_requests, mock_config):
     from battery_notifier.worker_client import WorkerClient
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"ok": False, "error": "db_error"}
     mock_requests.post.return_value = mock_resp
 
@@ -62,6 +64,7 @@ def test_worker_send_alert_success(mock_requests, mock_config):
     from battery_notifier.worker_client import WorkerClient
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"ok": True, "alert_active": 1, "alert_type": "THIEF_ALERT"}
     mock_requests.post.return_value = mock_resp
 
@@ -77,10 +80,11 @@ def test_worker_send_alert_rate_limited(mock_requests, mock_config):
     from battery_notifier.worker_client import WorkerClient
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"ok": False, "error": "rate_limited"}
     mock_requests.post.return_value = mock_resp
 
-    wc = WorkerClient("https://test.example.com", token="mytoken", config=mock_config)
+    wc = WorkerClient("https://test-worker", token="mytoken", config=mock_config)
     result = wc.send_alert(alert_type="THIEF_ALERT", battery_pct=75, is_charging=False)
 
     assert result is False
@@ -92,6 +96,7 @@ def test_worker_poll(mock_requests, mock_config):
     from battery_notifier.worker_client import WorkerClient
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {
         "ok": True,
         "alert_active": 1,
@@ -102,7 +107,7 @@ def test_worker_poll(mock_requests, mock_config):
     }
     mock_requests.get.return_value = mock_resp
 
-    wc = WorkerClient("https://test.example.com", token="mytoken", config=mock_config)
+    wc = WorkerClient("https://test-worker", token="mytoken", config=mock_config)
     result = wc.poll()
 
     assert result["ok"] is True
@@ -116,10 +121,11 @@ def test_worker_clear_alert(mock_requests, mock_config):
     from battery_notifier.worker_client import WorkerClient
 
     mock_resp = MagicMock()
+    mock_resp.status_code = 200
     mock_resp.json.return_value = {"ok": True, "alert_active": 0}
     mock_requests.post.return_value = mock_resp
 
-    wc = WorkerClient("https://test.example.com", token="mytoken", config=mock_config)
+    wc = WorkerClient("https://test-worker", token="mytoken", config=mock_config)
     result = wc.clear_alert()
 
     assert result is True
