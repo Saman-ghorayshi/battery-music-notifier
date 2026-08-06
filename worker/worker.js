@@ -170,6 +170,29 @@ async function handleSendAlert(request, db, user, env) {
     ).bind(user.user_id, excess).run();
   }
 
+  // Send Telegram notification if bot is configured
+  if (env.telegram_token && env.chat_id) {
+    let tgText = "";
+    if (alertType === "THIEF_ALERT") {
+      tgText = "THIEF ALERT -- your phone may have been unplugged or stolen. Battery: " + batteryPct + "%";
+    } else if (isCharging && batteryPct >= 80) {
+      tgText = "Battery charged to " + batteryPct + "%, unplug to save battery life";
+    } else if (!isCharging && batteryPct <= 20) {
+      tgText = "Battery low: " + batteryPct + "%, plug in your charger";
+    } else {
+      tgText = "Battery: " + batteryPct + "% (" + (isCharging ? "charging" : "discharging") + ")";
+    }
+    try {
+      await fetch("https://api.telegram.org/bot" + env.telegram_token + "/sendMessage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: env.chat_id, text: tgText }),
+      });
+    } catch (e) {
+      // Telegram failed, but the alert is already in D1 -- not critical
+    }
+  }
+
   return json({ ok: true, alert_active: 1, alert_type: alertType });
 }
 
