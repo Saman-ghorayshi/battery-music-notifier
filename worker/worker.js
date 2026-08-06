@@ -171,6 +171,7 @@ async function handleSendAlert(request, db, user, env) {
   }
 
   // Send Telegram notification if bot is configured
+  // Only notify for meaningful alerts, not every poll
   if (env.telegram_token && env.chat_id) {
     let tgText = "";
     if (alertType === "THIEF_ALERT") {
@@ -179,17 +180,21 @@ async function handleSendAlert(request, db, user, env) {
       tgText = "Battery charged to " + batteryPct + "%, unplug to save battery life";
     } else if (!isCharging && batteryPct <= 20) {
       tgText = "Battery low: " + batteryPct + "%, plug in your charger";
-    } else {
-      tgText = "Battery: " + batteryPct + "% (" + (isCharging ? "charging" : "discharging") + ")";
     }
-    try {
-      await fetch("https://api.telegram.org/bot" + env.telegram_token + "/sendMessage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: env.chat_id, text: tgText }),
-      });
-    } catch (e) {
-      // Telegram failed, but the alert is already in D1 -- not critical
+    // Include device name if present so you know which device sent it
+    if (tgText && user.device_name) {
+      tgText = "[" + user.device_name + "] " + tgText;
+    }
+    if (tgText) {
+      try {
+        await fetch("https://api.telegram.org/bot" + env.telegram_token + "/sendMessage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: env.chat_id, text: tgText }),
+        });
+      } catch (e) {
+        // Telegram failed, but the alert is already in D1 -- not critical
+      }
     }
   }
 
