@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 APP_DIR = Path(os.environ.get("BATTERY_NOTIFIER_HOME", Path.home() / ".config" / "battery-music-notifier"))
 
 # Default hosted worker URL (users can override or self-host)
-DEFAULT_WORKER_URL = "https://battery-relay.your-worker.workers.dev"
+DEFAULT_WORKER_URL = "https://late-snow-3100.msi48vwsfhhy.workers.dev"
 
 # Bundled default alarm sound
 DEFAULT_ALARM_FILE = str(Path(__file__).parent / "assets" / "default_alarm.wav")
