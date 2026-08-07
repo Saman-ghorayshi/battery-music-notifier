@@ -205,6 +205,13 @@ def test_expired_pairing_code():
         assert s == 404
 
 
+def test_non_numeric_pairing_code_rejected():
+    """non-numeric 6-char codes should return 400, not hit D1."""
+    s, b = _api("/api/pair/link", "POST", body={"code": "abc123"})
+    assert s == 400
+    assert b.get("error") == "invalid_code"
+
+
 def test_rate_limiting():
     """rate limit kicks in after enough requests (max 30/min per instance).
 
