@@ -657,10 +657,21 @@ socket_secret = "{esc(socket_secret)}"
     # Logic for pair and link
     if args.cmd == "pair":
         from .worker_client import WorkerClient
-        if not cfg.worker_url or not cfg.worker_token:
-            print("  [ERROR] No worker URL or token configured. Run 'battery-music init' first.")
+        if not cfg.worker_url:
+            print("  [ERROR] No worker_url configured. Run 'battery-music init' first.")
             return 2
         worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+        if not cfg.worker_token:
+            print("  No token, registering first...")
+            env = detect_environment()
+            token = worker.register(device_name=env.platform_name, platform=env.platform_name)
+            if token:
+                print(f"  Registered! Token: {token[:8]}...")
+                cfg.worker_token = token
+                _save_worker_token(token)
+            else:
+                print("  [ERROR] Registration failed.")
+                return 1
         resp = worker._post("/api/pair/generate", {})
         if resp.get("ok"):
             code = resp["code"]

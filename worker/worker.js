@@ -425,7 +425,7 @@ async function handlePairGenerate(request, db, user) {
 async function handlePairLink(request, db) {
   const body = await request.json().catch(() => ({}));
   const code = body.code;
-  if (!code || code.length !== 6) return json({ ok: false, error: "invalid_code" }, 400);
+  if (!code || code.length !== 6 || !/^\d{6}$/.test(code)) return json({ ok: false, error: "invalid_code" }, 400);
 
   const record = await db.prepare("SELECT * FROM pairing_codes WHERE code = ? AND expires_at > ?")
     .bind(code, now()).first();
