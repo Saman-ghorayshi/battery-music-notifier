@@ -26,7 +26,7 @@ TG_TOKEN = os.environ.get("TG_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 
 
-def _api(path, method="GET", token=None, body=None):
+def _api(path, method="GET", token=None, body=None, timeout=10):
     """hit the worker, return (status, json_body)."""
     url = f"{WORKER_URL}{path}?_t={int(time.time())}"
     headers = {
@@ -38,7 +38,7 @@ def _api(path, method="GET", token=None, body=None):
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
             try:
                 return resp.status, json.loads(raw)
@@ -52,7 +52,7 @@ def _api(path, method="GET", token=None, body=None):
             return e.code, {"_raw": raw.decode()[:300]}
 
 
-def _tg_send(text):
+def _send_tg(text):
     """send a message via telegram, return True on success."""
     if not TG_TOKEN or not CHAT_ID:
         return False
@@ -68,7 +68,6 @@ def _tg_send(text):
             return data.get("ok", False)
     except Exception:
         return False
-
 
 # ---- tests ----
 
@@ -137,13 +136,39 @@ def test_send_thief_alert():
         "alert_type": "THIEF_ALERT",
         "battery_pct": 50,
         "is_charging": False,
-    })
+    }, timeout=30)
     assert s == 200
     assert b.get("ok") is True
 
     s, b = _api("/api/poll", "GET", token=token)
     assert b["alert_type"] == "THIEF_ALERT"
     assert b["battery_pct"] == 50
+
+
+def test_thief_alert_repeated_telegram():
+    """thief alert sends 3 telegram messages (deep work mode).
+
+    The worker sends 3 messages 5s apart for urgent alerts.
+    We verify by checking the response takes >10s (3 messages with 5s sleeps).
+    """
+    import time as _time
+    _, reg = _api("/api/register", "POST", body={"device_name": "test-deepwork-urgent", "platform": "linux"})
+    token = reg["token"]
+
+    start = _time.time()
+    s, b = _api("/api/alert", "POST", token=token, body={
+        "alert_type": "THIEF_ALERT",
+        "battery_pct": 45,
+        "is_charging": False,
+    }, timeout=30)
+    elapsed = _time.time() - start
+
+    assert s == 200
+    # 3 messages with 5s sleeps between = at least 10s
+    assert elapsed > 10, f"expected >10s for 3 repeated messages, got {elapsed:.1f}s"
+
+    # Clear so it doesn't keep buzzing
+    _api("/api/clear", "POST", token=token)
 
 
 def test_clear_alert():
@@ -258,7 +283,7 @@ def test_thief_alert_bypasses_rate_limit():
         "alert_type": "THIEF_ALERT",
         "battery_pct": 40,
         "is_charging": False,
-    })
+    }, timeout=30)
     assert s == 200
     assert b.get("ok") is True
 
