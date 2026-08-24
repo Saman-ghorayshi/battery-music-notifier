@@ -6,6 +6,11 @@ build/
 dist/
 .venv/
 config.toml
-*.wrangler/
-*node_modules/
 *config.toml
+config.toml.bak
+.wrangler/
+.dev.vars
+node_modules/
+last_server.json
+*.log
+.env
