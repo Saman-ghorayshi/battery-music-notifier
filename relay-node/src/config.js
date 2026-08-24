@@ -14,6 +14,12 @@ module.exports = {
   adminKey: process.env.ADMIN_KEY || "",
   rateLimitEnabled: process.env.RATE_LIMIT_ENABLED !== "false",
 
+  // Optional: redis://... shares rate-limit counters across instances.
+  // Empty = per-process in-memory buckets (fine for single-instance hosts).
+  redisUrl: process.env.REDIS_URL || "",
+  auditFile:
+    process.env.AUDIT_FILE || require("path").join(__dirname, "..", "logs", "audit.log"),
+
   // Mirrors worker.js constants exactly so clients behave identically.
   rateWindowSec: 60,
   userRateMax: 30,        // requests/min/user (THIEF_ALERT exempt)

@@ -36,9 +36,11 @@ app.use((err, _req, res, _next) => {
 async function start() {
   // Fail fast if the DB is unreachable or migrations are missing.
   await pool.query("SELECT 1 FROM schema_migrations LIMIT 1");
+  await require("./rateLimit").initRateLimit();
 
   const server = app.listen(config.port, () => {
-    console.log(`Battery relay listening on :${config.port} (rate limiting ${config.rateLimitEnabled ? "ON" : "OFF"})`);
+    const backend = config.redisUrl ? "redis" : "memory";
+    console.log(`Battery relay listening on :${config.port} (limits: ${backend}, ${config.rateLimitEnabled ? "on" : "off"})`);
   });
   server.keepAliveTimeout = 65_000; // behind proxies that use HTTP keep-alive
   return server;

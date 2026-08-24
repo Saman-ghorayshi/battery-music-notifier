@@ -4,14 +4,15 @@
 const express = require("express");
 const pool = require("../db");
 const config = require("../config");
-const { sha256, randomToken, now, clientIp, checkRateLimit, cleanBuckets } = require("../util");
+const { sha256, randomToken, now, clientIp } = require("../util");
+const { checkRateLimit } = require("../rateLimit");
 const { authUser, purgeExpired } = require("../auth");
 
 const router = express.Router();
 
 // ---- POST /api/register --------------------------------------------------
 router.post("/api/register", async (req, res) => {
-  if (config.rateLimitEnabled && !checkRateLimit("reg:" + clientIp(req), config.registerRateMax)) {
+  if (config.rateLimitEnabled && !(await checkRateLimit("reg:" + clientIp(req), config.registerRateMax))) {
     return res.status(429).json({ ok: false, error: "rate_limited" });
   }
   const body = req.body || {};
@@ -44,10 +45,9 @@ router.post("/api/alert", authUser, async (req, res) => {
   // THIEF_ALERT always bypasses rate limiting -- a thief unplugging the
   // charger must get through even if the device has been polling heavily.
   const isCriticalAlert = alertType === "THIEF_ALERT";
-  if (!isCriticalAlert && config.rateLimitEnabled && !checkRateLimit(req.user.user_id)) {
+  if (!isCriticalAlert && config.rateLimitEnabled && !(await checkRateLimit(req.user.user_id))) {
     return res.status(429).json({ ok: false, error: "rate_limited" });
   }
-  cleanBuckets();
   purgeExpired(pool);
 
   const batteryPct = typeof body.battery_pct === "number" ? body.battery_pct : -1;
