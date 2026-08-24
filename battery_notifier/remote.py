@@ -24,6 +24,24 @@ from .connection import (
 log = logging.getLogger(__name__)
 
 
+def _start_adb_bridge_async(mode: str, port: int, max_retries: int = 3) -> threading.Thread:
+    """Run auto_setup_usb_bridge in a daemon thread (fixes C4).
+
+    With adb installed but no phone attached, the synchronous call stalls
+    startup for ~6s before the socket ever listens. The bridge is now set
+    up concurrently; connection/discovery proceeds immediately.
+    """
+    def _setup():
+        try:
+            auto_setup_usb_bridge(mode=mode, port=port, max_retries=max_retries)
+        except Exception as e:  # never let bridge setup kill the monitor
+            log.warning("USB ADB bridge setup failed: %s", e)
+
+    t = threading.Thread(target=_setup, name=f"adb-bridge-{mode}", daemon=True)
+    t.start()
+    return t
+
+
 class RemoteMonitor:
     """Client-side monitor: reads battery, sends commands to laptop server."""
 
@@ -42,6 +60,10 @@ class RemoteMonitor:
             if config:
                 config.proxy_url = self.effective_proxy
                 log.info("Auto-applied detected proxy: %s", self.effective_proxy)
+
+    def stop(self) -> None:
+        """Signal the monitor loops to exit. Thread-safe; used by the GUI."""
+        self._stop_event.set()
 
         from .battery import Battery
         self.battery = Battery()
@@ -129,10 +151,11 @@ class RemoteMonitor:
         self._print_env_status()
         
         # ADB Forward Fix: If desktop is client and phone is server, setup forward bridge
+        # Non-blocking: runs in a daemon thread so no phone != 6s startup stall (C4)
         use_local = self.conn_mode in ("auto", "local")
         if use_local and (self.env.is_windows or self.env.is_macos or self.env.is_linux):
             print("  [Desktop Client] Checking for USB ADB bridge to phone...")
-            auto_setup_usb_bridge(mode="forward", port=self.port, max_retries=3)
+            _start_adb_bridge_async(mode="forward", port=self.port, max_retries=3)
             
         # In telegram mode, skip local discovery entirely
         if self.conn_mode == "telegram":
@@ -275,6 +298,10 @@ class NotificationServer:
             if config:
                 config.proxy_url = self.effective_proxy
                 log.info("Auto-applied detected proxy: %s", self.effective_proxy)
+
+    def stop(self) -> None:
+        """Signal all server loops to exit. Thread-safe; used by the GUI."""
+        self._stop_event.set()
 
     def _run_udp_beacon(self) -> None:
         """Broadcast UDP beacon so clients can auto-discover this server."""
@@ -457,7 +484,9 @@ class NotificationServer:
         # USB bridge setup (local modes only)
         if use_local:
             print("  Checking for USB ADB bridge...")
-            auto_setup_usb_bridge(mode="reverse", port=self.port, max_retries=3)
+            # Non-blocking (C4): bind + accept loop start immediately; the
+            # reverse-forward appears in the background once adb finds a phone.
+            _start_adb_bridge_async(mode="reverse", port=self.port, max_retries=3)
 
             # UDP beacon for auto-discovery
             self._beacon_thread = threading.Thread(target=self._run_udp_beacon, daemon=True)
