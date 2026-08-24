@@ -178,11 +178,17 @@ def _detect_vpn_android() -> tuple[bool, Optional[str]]:
 
 def _detect_vpn_windows() -> tuple[bool, Optional[str]]:
     """Detect VPN on Windows via PowerShell or ipconfig."""
+    # Covers Wintun/TAP drivers plus the common consumer VPNs seen in the wild:
+    # Cloudflare WARP, Tailscale, Mullvad, NordLynx/NordVPN, Proton, ExpressVPN,
+    # ZenMate, WireGuard, OpenVPN, Hamachi, ZeroTier (Phase 1 keyword sweep).
+    win_kw = ("Wintun|TAP|VPN|WireGuard|OpenVPN|Hamachi|ZeroTier"
+              "|Cloudflare WARP|WARP|Tailscale|Mullvad|NordLynx|NordVPN"
+              "|Proton|ExpressVPN|ZenMate")
     # Try PowerShell first for adapter names
     try:
         result = subprocess.run(
             ["powershell", "-Command",
-             "Get-NetAdapter | Where-Object {$_.InterfaceDescription -match 'Wintun|TAP|VPN|WireGuard|OpenVPN|Hamachi|ZeroTier'} | Select-Object -ExpandProperty Name"],
+             f"Get-NetAdapter | Where-Object {{$_.InterfaceDescription -match '{win_kw}'}} | Select-Object -ExpandProperty Name"],
             capture_output=True, text=True, timeout=5,
         )
         names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
@@ -197,7 +203,11 @@ def _detect_vpn_windows() -> tuple[bool, Optional[str]]:
             ["ipconfig", "/all"], capture_output=True, text=True, timeout=5
         )
         output = result.stdout.lower()
-        vpn_keywords = ["wintun", "tap-windows", "openvpn", "wireguard", "vpn adapter"]
+        vpn_keywords = [
+            "wintun", "tap-windows", "openvpn", "wireguard", "vpn adapter",
+            "cloudflare warp", "warp", "tailscale", "mullvad", "nordlynx",
+            "nordvpn", "protonvpn", "expressvpn", "zenmate",
+        ]
         for kw in vpn_keywords:
             if kw in output:
                 return True, kw
@@ -208,6 +218,8 @@ def _detect_vpn_windows() -> tuple[bool, Optional[str]]:
 
 def _detect_vpn_unix() -> tuple[bool, Optional[str]]:
     """Detect VPN on Linux/macOS by checking network interfaces."""
+    # wg-quick creates interfaces named after the config file; tailscale0 and
+    # utun* (macOS) are the virtual adapters used by userspace VPNs.
     try:
         result = subprocess.run(
             ["ip", "link", "show"], capture_output=True, text=True, timeout=5
@@ -217,7 +229,10 @@ def _detect_vpn_unix() -> tuple[bool, Optional[str]]:
             if ": " in line:
                 iface = line.split(": ")[1].split(":")[0].strip().split("@")[0]
                 lower = iface.lower()
-                if lower.startswith(("tun", "tap", "ppp")) or "vpn" in lower:
+                if (
+                    lower.startswith(("tun", "tap", "ppp", "utun", "wg", "tailscale"))
+                    or "vpn" in lower
+                ):
                     return True, iface
     except Exception:
         pass
@@ -231,7 +246,10 @@ def _detect_vpn_unix() -> tuple[bool, Optional[str]]:
             line = line.strip()
             if line and not line.startswith("\t") and ":" in line:
                 iface = line.split(":")[0].strip().lower()
-                if iface.startswith(("tun", "tap", "ppp", "utun", "ipsec")) or "vpn" in iface:
+                if (
+                    iface.startswith(("tun", "tap", "ppp", "utun", "ipsec", "wg", "tailscale"))
+                    or "vpn" in iface
+                ):
                     return True, iface
     except Exception:
         pass
@@ -304,8 +322,13 @@ def get_effective_proxy(config) -> Optional[str]:
 
     If config has a proxy explicitly set, use that.
     Otherwise, auto-detect and use the first available local proxy.
+
+    Opt-out (C5 fix): proxy_url == "direct"/"off"/"none" forces a direct
+    connection and skips both detection and the local port scan entirely.
     """
     if config and config.proxy_url:
+        if config.proxy_url.lower() in ("direct", "off", "none"):
+            return None
         return config.proxy_url
     env = detect_environment()
     return env.auto_proxy

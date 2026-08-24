@@ -48,7 +48,10 @@ class Notifier:
     def _send_telegram(self, title: str, message: str) -> None:
         if not self.cfg or not self.cfg.telegram_token or not self.cfg.telegram_chat_id:
             return
-        proxies = {"http": self.cfg.proxy_url, "https": self.cfg.proxy_url} if self.cfg.proxy_url else None
+        # "direct"/"off"/"none" opt-out must never be passed as a literal proxy URL
+        proxy = (self.cfg.proxy_url or "").strip()
+        use_proxy = bool(proxy) and proxy.lower() not in ("direct", "off", "none")
+        proxies = {"http": proxy, "https": proxy} if use_proxy else None
         try:
             url = f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage"
             payload = {"chat_id": self.cfg.telegram_chat_id, "text": f"{title}: {message}"}

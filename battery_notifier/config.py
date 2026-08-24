@@ -21,6 +21,11 @@ def sanitize_proxy_url(url: str) -> str:
     if not url:
         return ""
 
+    # Opt-out keywords (C5 fix): force a direct connection and disable
+    # auto-detection so a local proxy can never hijack traffic.
+    if url.lower() in ("direct", "off", "none"):
+        return "direct"
+
     # Case A: User typed just a raw port number (e.g., "10808" or "7890")
     if url.isdigit():
         port = int(url)
@@ -71,9 +76,12 @@ def _resolve_annotation(ann):
         if ann.startswith("Optional["):
             inner = ann[9:-1]
             return _resolve_annotation(inner)
-        # List[...]  
-        if ann.startswith("List["):
+        # List[...] / list[...] (PEP 585 lowercase included)
+        if ann.startswith(("List[", "list[")):
             return list
+        # pathlib.Path (incl. Optional[Path])
+        if ann == "Path":
+            return Path
     return ann
 
 
@@ -116,14 +124,26 @@ class Config:
         cfg = cls()
         path = path or (APP_DIR / "config.toml")
         if path.exists():
+            data = {}
             try:
-                import tomllib
-                with path.open("rb") as f:
-                    data = tomllib.load(f).get("battery_notifier", {})
-            except ModuleNotFoundError:
-                import tomli
-                with path.open("rb") as f:
-                    data = tomli.load(f).get("battery_notifier", {})
+                try:
+                    import tomllib
+                except ModuleNotFoundError:
+                    import tomli as tomllib
+                try:
+                    with path.open("rb") as f:
+                        data = tomllib.load(f).get("battery_notifier", {})
+                except tomllib.TOMLDecodeError as e:
+                    # A corrupted config must not crash every command with a raw
+                    # traceback (e.g. unescaped Windows backslash paths in TOML).
+                    print(f"  [WARN] Config file is invalid TOML: {path}")
+                    print(f"         {e}")
+                    print(f"         Fix it manually, delete it, or run 'battery-music init --force'.")
+                    print(f"         Using default settings for now.\n")
+                    data = {}
+            except Exception as e:
+                log.warning("Could not read config %s: %s", path, e)
+                data = {}
             
             # Type-safe field assignment (Bug #6 Fix)
             type_hints = {f.name: f.type for f in cls.__dataclass_fields__.values()}
