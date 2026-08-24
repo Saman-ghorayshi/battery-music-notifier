@@ -16,6 +16,10 @@ import os
 
 import pytest
 
+# Every test in this file hits the REAL worker/D1/Telegram. Never run in CI
+# or plain `pytest`; execute explicitly with:  pytest -m live
+pytestmark = pytest.mark.live
+
 WORKER_URL = os.environ.get(
     "WORKER_URL",
     "https://late-snow-3100.msi48vwsfhhy.workers.dev",
