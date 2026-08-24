@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Battery Music Notifier</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<nav id="tabs">
+  <div class="brand"><span class="brand-bolt">&#9889;</span> Battery Music Notifier</div>
+  <button data-view="dashboard" class="tab active">Dashboard</button>
+  <button data-view="thief" class="tab">Thief Catcher</button>
+  <button data-view="pair" class="tab">Pair Device</button>
+  <button data-view="settings" class="tab">Settings</button>
+  <button data-view="diagnostics" class="tab">Diagnostics</button>
+  <button data-view="logs" class="tab">Logs</button>
+</nav>
+
+<main>
+<!-- DASHBOARD -->
+<section id="view-dashboard" class="view active">
+  <div class="grid two">
+    <div class="card center">
+      <svg viewBox="0 0 200 200" width="240" height="240">
+        <circle cx="100" cy="100" r="80" fill="none" stroke="#30475e" stroke-width="16"/>
+        <circle id="ring" cx="100" cy="100" r="80" fill="none" stroke="#00d4ff"
+                stroke-width="16" stroke-linecap="round"
+                stroke-dasharray="502" stroke-dashoffset="502"
+                transform="rotate(-90 100 100)"/>
+        <text id="ring-pct" x="100" y="96" text-anchor="middle" class="ring-text">--%</text>
+        <text id="ring-state" x="100" y="126" text-anchor="middle" class="ring-sub">reading...</text>
+      </svg>
+    </div>
+    <div class="card">
+      <h2>Status</h2>
+      <div class="row"><span>Connection tier</span><span id="tier-badge" class="badge">-</span></div>
+      <div class="row"><span>Worker heartbeat</span>
+        <span><span id="hb-dot" class="dot"></span> <span id="hb-text">...</span></span></div>
+      <div class="row"><span>Relay listener</span><span id="relay-badge" class="badge">stopped</span></div>
+      <div class="row"><span>Socket server</span><span id="serve-badge" class="badge">stopped</span></div>
+      <div class="row wide"><span>Last alert</span><span id="last-alert">none</span></div>
+      <div class="actions">
+        <button id="btn-relay" class="btn primary">Start Relay</button>
+        <button id="btn-serve" class="btn">Start Socket Server</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- THIEF CATCHER -->
+<section id="view-thief" class="view">
+  <div class="card center tall">
+    <h2>Thief Catcher</h2>
+    <p class="muted">Alarm fires the moment the charger is unplugged.<br>Re-plugging stops it.</p>
+    <button id="thief-toggle" class="giant-toggle">DISARMED</button>
+    <div class="grace-wrap">
+      <svg viewBox="0 0 120 120" width="120" height="120">
+        <circle cx="60" cy="60" r="50" fill="none" stroke="#30475e" stroke-width="10"/>
+        <circle id="grace-ring" cx="60" cy="60" r="50" fill="none" stroke="#ff9f43"
+                stroke-width="10" stroke-linecap="round"
+                stroke-dasharray="314" stroke-dashoffset="314"
+                transform="rotate(-90 60 60)"/>
+      </svg>
+      <div id="grace-label" class="muted"></div>
+    </div>
+    <label class="inline"><input type="checkbox" id="thief-force"> Arm even if not charging</label>
+  </div>
+</section>
+
+<!-- PAIR DEVICE -->
+<section id="view-pair" class="view">
+  <div class="card center tall">
+    <h2>Pair a Phone</h2>
+    <p class="muted">On your phone (Termux or app): <code>battery-music link CODE</code></p>
+    <div id="pair-result" class="hidden">
+      <div id="pair-code" class="code-big">------</div>
+      <img id="pair-qr" alt="QR code" class="qr hidden"/>
+      <p class="muted">Single-use, expires in 5 minutes.</p>
+    </div>
+    <button id="btn-pair" class="btn primary">Generate Pairing Code</button>
+    <p id="pair-error" class="error"></p>
+  </div>
+</section>
+
+<!-- SETTINGS -->
+<section id="view-settings" class="view">
+  <form id="settings-form" onsubmit="return false">
+    <div class="grid two">
+
+      <div class="card">
+        <h2>Sounds</h2>
+        <label>Music files (battery notifications)</label>
+        <div class="filelist" id="music-list"></div>
+        <button type="button" class="btn small" data-pick="music_files">Add music...</button>
+        <label style="margin-top:12px">Alarm sound (thief catcher)</label>
+        <div class="filelist" id="alarm-list"></div>
+        <button type="button" class="btn small" data-pick="alarm_files">Add alarm...</button>
+        <label>Volume: <output id="volume-out">80</output>%</label>
+        <input type="range" id="volume" min="0" max="100" step="5">
+        <label class="inline"><input type="checkbox" id="annoying"> Loop annoyingly until unplugged</label>
+      </div>
+
+      <div class="card">
+        <h2>Battery Targets</h2>
+        <label>Alert below: <output id="min-out"></output>%</label>
+        <input type="range" id="min_percentage" min="1" max="90" step="1">
+        <label>Alert above: <output id="max-out"></output>%</label>
+        <input type="range" id="max_percentage" min="10" max="100" step="1">
+        <label>Poll interval (seconds)</label>
+        <input type="number" id="poll_interval" min="2" max="600" step="1">
+        <label>Quiet hours (do not disturb)</label>
+        <div class="inline-row">
+          <select id="quiet-start"></select><span>to</span><select id="quiet-end"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Network</h2>
+        <h3>Proxy</h3>
+        <label class="inline"><input type="radio" name="proxy" value="auto" checked> Auto-detect local proxy</label>
+        <label class="inline"><input type="radio" name="proxy" value="direct"> Direct (never proxy)</label>
+        <label class="inline"><input type="radio" name="proxy" value="url"> Custom URL</label>
+        <input type="text" id="proxy_url_text" placeholder="socks5://127.0.0.1:10808">
+        <label>Worker relay URL</label>
+        <input type="text" id="worker_url">
+        <label class="inline"><input type="checkbox" id="autostart"> Start automatically on boot</label>
+      </div>
+
+      <div class="card">
+        <h2>Notifications</h2>
+        <details><summary>Telegram</summary>
+          <label>Bot token</label>
+          <input type="password" id="telegram_token" placeholder="__SET__ means configured">
+          <label>Chat ID</label>
+          <input type="text" id="telegram_chat_id">
+        </details>
+        <details><summary>Email</summary>
+          <label>SMTP server</label><input type="text" id="email_smtp_server">
+          <label>SMTP port</label><input type="number" id="email_smtp_port">
+          <label>Sender</label><input type="text" id="email_sender">
+          <label>Password</label><input type="password" id="email_password" placeholder="__SET__ means configured">
+          <label>Receiver</label><input type="text" id="email_receiver">
+        </details>
+        <details><summary>Advanced</summary>
+          <label>Admin key</label>
+          <input type="password" id="admin_key" placeholder="__SET__ means configured">
+          <label>Socket secret (LAN mode)</label>
+          <input type="password" id="socket_secret" placeholder="__SET__ means configured">
+        </details>
+      </div>
+    </div>
+    <div class="actions sticky">
+      <button id="btn-save" class="btn primary big">Save Settings</button>
+      <span id="save-status"></span>
+    </div>
+  </form>
+</section>
+
+<!-- DIAGNOSTICS -->
+<section id="view-diagnostics" class="view">
+  <div class="actions">
+    <button id="btn-doc" class="btn primary">Run Diagnostics</button>
+  </div>
+  <div id="doc-cards" class="grid two"></div>
+</section>
+
+<!-- LOGS -->
+<section id="view-logs" class="view">
+  <div class="actions"><button id="btn-log-refresh" class="btn">Refresh</button></div>
+  <pre id="log-view" class="logview">(no logs loaded)</pre>
+</section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

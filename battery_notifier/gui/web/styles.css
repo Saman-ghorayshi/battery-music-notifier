@@ -1,0 +1,148 @@
+/* Battery Music Notifier GUI -- dark web-tech theme, no build step */
+:root {
+  --bg: #12121f;
+  --panel: #1a1a2e;
+  --panel2: #16213e;
+  --line: #30475e;
+  --cyan: #00d4ff;
+  --green: #00d478;
+  --amber: #ff9f43;
+  --red: #ff4757;
+  --text: #e0e0e0;
+  --muted: #8a93a6;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif; font-size: 14px;
+}
+
+/* ---- tabs ---- */
+#tabs {
+  display: flex; align-items: center; gap: 4px;
+  padding: 10px 16px; background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 5;
+}
+.brand { font-weight: 600; margin-right: 18px; color: var(--cyan); }
+.brand-bolt { color: var(--amber); }
+.tab {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  padding: 8px 12px; border-radius: 8px; font-size: 14px;
+}
+.tab:hover { color: var(--text); background: var(--panel2); }
+.tab.active { color: var(--cyan); background: var(--panel2); }
+
+main { padding: 20px; max-width: 1080px; margin: 0 auto; }
+.view { display: none; }
+.view.active { display: block; animation: fade .15s ease; }
+@keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+
+/* ---- layout ---- */
+.grid.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .grid.two { grid-template-columns: 1fr; } }
+.card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; padding: 18px;
+}
+.card h2 { margin: 0 0 12px; color: var(--cyan); font-size: 15px;
+  text-transform: uppercase; letter-spacing: .06em; }
+.card h3 { margin: 14px 0 6px; font-size: 13px; color: var(--amber); }
+.center { text-align: center; }
+.tall { max-width: 520px; margin: 0 auto; }
+
+.row { display: flex; justify-content: space-between; padding: 7px 0;
+  border-bottom: 1px dashed rgba(48,71,94,.55); gap: 10px; }
+.row.wide span:last-child { text-align: right; }
+.actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.actions.sticky { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0; }
+
+/* ---- controls ---- */
+.btn {
+  background: var(--line); color: #fff; border: none; cursor: pointer;
+  padding: 9px 16px; border-radius: 8px; font-size: 14px;
+}
+.btn:hover { filter: brightness(1.2); }
+.btn.primary { background: var(--cyan); color: #10202b; font-weight: 600; }
+.btn.danger { background: var(--red); }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.btn.big { padding: 11px 26px; font-size: 15px; }
+.btn:disabled { opacity: .45; cursor: default; }
+
+.badge { padding: 3px 10px; border-radius: 999px; background: var(--panel2);
+  border: 1px solid var(--line); font-size: 12px; }
+.badge.on { color: var(--green); border-color: var(--green); }
+.badge.off { color: var(--muted); }
+.badge.err { color: var(--red); border-color: var(--red); }
+
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted);
+  display: inline-block; }
+.dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.dot.bad { background: var(--red); }
+
+input[type=text], input[type=password], input[type=number], select {
+  width: 100%; padding: 8px 10px; margin: 4px 0 10px;
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; font-size: 13px;
+}
+label { display: block; margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+label.inline { display: flex; align-items: center; gap: 7px; margin: 8px 0; color: var(--text); font-size: 13.5px; }
+.inline-row { display: flex; align-items: center; gap: 8px; }
+details { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-top: 10px; }
+summary { cursor: pointer; color: var(--cyan); }
+input[type=range] { width: 100%; accent-color: var(--cyan); }
+.muted { color: var(--muted); }
+.error { color: var(--red); }
+.hidden { display: none !important; }
+
+/* ---- battery ring ---- */
+.ring-text { fill: var(--text); font-size: 40px; font-weight: 700; }
+.ring-sub { fill: var(--muted); font-size: 14px; }
+
+/* ---- thief toggle ---- */
+.giant-toggle {
+  width: 240px; height: 84px; margin: 18px auto; display: block;
+  font-size: 22px; font-weight: 800; letter-spacing: .08em;
+  border-radius: 42px; cursor: pointer;
+  background: var(--panel2); color: var(--muted);
+  border: 2px solid var(--line); transition: all .25s ease;
+}
+.giant-toggle.armed {
+  background: rgba(255,71,87,.16); color: var(--red);
+  border-color: var(--red);
+  animation: pulse 1.6s infinite;
+}
+@keyframes pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(255,71,87,.35); }
+  50%     { box-shadow: 0 0 24px 6px rgba(255,71,87,.35); }
+}
+.grace-wrap { position: relative; width: 120px; margin: 0 auto; }
+#grace-ring { transition: stroke-dashoffset .3s linear, opacity .3s ease; }
+
+/* ---- pair ---- */
+.code-big {
+  font-size: 52px; letter-spacing: .28em; font-weight: 800;
+  color: var(--amber); margin: 14px 0; font-family: monospace;
+}
+.qr { width: 180px; height: 180px; image-rendering: pixelated;
+  border-radius: 8px; background: #fff; padding: 6px; }
+code { background: var(--panel2); padding: 2px 7px; border-radius: 5px; }
+
+/* ---- diagnostics / logs / files ---- */
+.doc-card { border-left: 4px solid var(--green); }
+.doc-card.bad { border-left-color: var(--red); }
+.doc-card pre { white-space: pre-wrap; font-size: 12px; color: var(--muted);
+  margin: 6px 0 0; font-family: Consolas, monospace; }
+.doc-card h2 { display: flex; justify-content: space-between; }
+.logview {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px; max-height: 60vh; overflow: auto; font-size: 12px;
+  font-family: Consolas, monospace; color: var(--muted);
+}
+.filelist { min-height: 30px; margin: 6px 0; }
+.fileitem { display: flex; justify-content: space-between; align-items: center;
+  background: var(--panel2); border-radius: 6px; padding: 5px 9px; margin: 4px 0;
+  font-size: 12.5px; overflow: hidden; }
+.fileitem span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.fileitem button { background: none; border: none; color: var(--red);
+  cursor: pointer; font-size: 14px; }
