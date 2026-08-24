@@ -30,6 +30,11 @@ Health check is just `GET /health`.
 - `PORT` - default 8787
 - `RATE_LIMIT_ENABLED` - set to `false` for a private single-user instance.
   THIEF_ALERT bypasses rate limiting either way, that one must never be blocked.
+- `REDIS_URL` - optional (`redis://...`). Set it and rate-limit counters move
+  from per-process memory into Redis, so several instances behind a load
+  balancer share one budget. Upstash's free tier works fine for this.
+- `AUDIT_FILE` - where the admin-action audit log goes
+  (`logs/audit.log` by default, JSONL: one JSON object per line).
 
 ## What matches the CF worker
 
@@ -43,10 +48,11 @@ Health check is just `GET /health`.
 - banned users get a clear 403 "banned" instead of generic 401
 - no server-side push of any kind - clients handle their own notifications
 
-The rate limit buckets live in process memory here, so if you run multiple
-instances behind a load balancer each one counts separately. For serious
-multi-instance deployments swap `src/util.js` buckets for Redis, everything
-else stays the same.
+The rate limit buckets live in process memory unless you set `REDIS_URL`, so
+running multiple instances without Redis means each one counts separately.
+Redis also survives restarts -- in-memory counters reset whenever the process
+does. If Redis errors out mid-request the limiter fails open: a broken cache
+must never be the thing that blocks a thief alert.
 
 ## Endpoints
 

@@ -322,7 +322,27 @@ npx wrangler secret put ADMIN_KEY
 npx wrangler deploy
 ```
 
+Upgrading an old deployment? Run `worker/migration_v2.sql` against your D1 first (see `worker/README.md`).
+
 Then edit `battery_notifier/config.py` and set `DEFAULT_WORKER_URL` to your deployed URL.
+
+### Self-hosted alternatives
+
+Two more options if you don't want Cloudflare:
+
+- **Node.js + PostgreSQL** (`relay-node/`) -- same API, runs anywhere Node runs,
+  optional Redis for shared rate-limit counters, ships with Docker Compose.
+  See `relay-node/README.md`.
+- The CF worker itself is self-hostable too (own domain, own D1).
+
+Point devices at yours during `battery-music init` (answer "n" to the hosted worker).
+
+## Security Model
+
+Short version: hashed tokens only, no accounts, no personal data, no server-side
+push. Full details in [SECURITY.md](SECURITY.md); every relay also serves a
+plain-language summary at `/privacy`.
+
 
 For obscurity: route through a throwaway domain. The health endpoint at `/` returns a generic "OK" page, not an API description.
 
