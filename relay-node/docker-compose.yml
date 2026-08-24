@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: battery
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-battery}
+      POSTGRES_DB: battery
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U battery -d battery"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  relay:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "8787"
+      DATABASE_URL: postgres://battery:${POSTGRES_PASSWORD:-battery}@db:5432/battery
+      ADMIN_KEY: ${ADMIN_KEY:?set ADMIN_KEY in .env (min 10 chars)}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+    ports:
+      - "8787:8787"
+    # Migrations run first via: docker compose run --rm relay npm run migrate
+    restart: unless-stopped
+
+volumes:
+  pgdata:
