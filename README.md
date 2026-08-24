@@ -9,6 +9,31 @@ A cross-platform battery monitor and thief catcher. Works on your phone (Termux)
 
 ---
 
+## Desktop GUI (v2.0)
+
+A full desktop app ships with v2.0: battery ring dashboard, one-click relay /
+socket server controls, giant Thief Catcher toggle with grace-period ring,
+QR pairing, settings editor that preserves your config comments, and doctor
+diagnostics as pass/fail cards. Sits in the system tray; closing the window
+minimizes to it.
+
+```bash
+pip install -e ".[gui]"
+battery-music-gui          # or: python -m battery_notifier.gui.app
+```
+
+Prefer a single file? Build (or download) the exe:
+
+```powershell
+pip install -e ".[dev,audio,gui]"
+pyinstaller battery_gui.spec --noconfirm   # -> dist/battery-music-gui.exe
+```
+
+> The exe is unsigned: Windows SmartScreen shows "Windows protected your PC".
+> Click *More info* -> *Run anyway*. This goes away once releases are code-signed.
+
+---
+
 ## Quick Start
 
 ### Install
@@ -105,6 +130,22 @@ battery-music client --host 127.0.0.1 --mode local
 ## Connection Tiers
 
 The app supports three connection methods. Use whatever fits your situation.
+
+### Support Matrix (VPN / censorship)
+
+| Tier | No VPN | Client VPN (v2rayN, Hiddify, WARP...) | Censored net + proxy |
+|---|---|---|---|
+| **Relay (HTTPS)** — default | ✅ | ✅ | ✅ |
+| **Telegram fallback** | ✅ | ✅* | ✅* (*needs reachable proxy; auto-detected) |
+| **USB (ADB tunnel)** | ✅ | ✅ | ✅ |
+| **Wi-Fi discovery (UDP/scan)** | ✅ | ❌ blocked by VPN | ❌ |
+
+Relay is pushed as the default path by the init wizard precisely because it
+survives every column of this table. Local socket modes remain available under
+advanced usage (`battery-music serve` / `client`). Set `proxy_url = "direct"`
+in config to forbid proxy auto-detection entirely.
+
+Run `battery-music doctor` for a live per-tier verdict on your machine.
 
 ### Tier 1: Cloudflare Worker Relay (Default)
 
