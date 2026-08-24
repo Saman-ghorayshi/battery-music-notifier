@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "battery-music-notifier"
-version = "1.0.0"
+dynamic = ["version"]
 description = "A distributed, proxy-isolated cross-platform battery telemetry daemon and alerting tool."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -23,21 +23,35 @@ dependencies = [
     "psutil>=5.9.0",
     "requests>=2.31.0",
     "PySocks>=1.7.1",
+    "tomlkit>=0.12.0",
     "tomli>=1.2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 audio = ["sounddevice>=0.4.6", "soundfile>=0.12.1"]
+gui = ["pywebview>=5.0", "pystray>=0.19.5", "Pillow>=10.0", "qrcode>=7.4"]
 windows = ["win10toast", "wmi"]
 macos   = ["pync"]
 linux   = ["notify2"]
-dev     = ["pytest", "pytest-mock"]
+dev     = ["pytest", "pytest-mock", "pyinstaller>=6.0"]
 
 [project.scripts]
 battery-music = "battery_notifier.cli:main"
+
+[project.gui-scripts]
+battery-music-gui = "battery_notifier.gui.app:main"
+
+[tool.setuptools]
+dynamic = { version = { attr = "battery_notifier.__version__" } }
 
 [tool.setuptools.packages.find]
 include = ["battery_notifier*"]
 
 [tool.setuptools.package-data]
-battery_notifier = ["assets/*.wav"]
+battery_notifier = ["assets/*.wav", "gui/web/*.html", "gui/web/*.css", "gui/web/*.js"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: integration tests hitting the real worker/D1/Telegram (deselected by default; run with -m live)",
+]
+addopts = "-m 'not live'"
