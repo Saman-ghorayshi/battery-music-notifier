@@ -40,7 +40,10 @@ router.post("/admin/login", async (req, res) => {
   res.json({ ok: true, session_key: sessionKey, expires_in: config.sessionTtlSec });
 });
 
-router.use(adminAuth);
+// Guard everything below EXCEPT login above. Path-scoped on purpose: this
+// router is mounted without a prefix, so a bare router.use(adminAuth) would
+// intercept unrelated paths (e.g. /api/nope would 401 instead of 404).
+router.use("/admin", adminAuth);
 
 // ---- GET /admin/stats --------------------------------------------------------
 router.get("/admin/stats", async (_req, res) => {
