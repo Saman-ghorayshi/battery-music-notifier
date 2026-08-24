@@ -105,11 +105,7 @@
 - `[x]` README support matrix: tier × {no VPN, client VPN, censored net w/ proxy}
   inserted above "Connection Tiers", plus direct-opt-out + doctor pointers.
 
-## Phase 2 — Desktop GUI (web tech)  `[ ]`
-
-> NEXT UP. Not started this session — see structure below.
-
-## Phase 2 — Desktop GUI (web tech)  `[ ]`
+## Phase 2 — Desktop GUI (web tech)  `[*]`
 
 ```
 battery_notifier/gui/
@@ -117,29 +113,45 @@ battery_notifier/gui/
   bridge.py     # JS↔Python API: get_state, arm/disarm, start/stop relay & serve,
                 # save_settings, pair_generate(+QR PNG data-URL), run_diagnostics
   services.py   # ServiceManager: NotificationServer / ThiefCatcher / relay loop
-                # as threads (pattern proven in integration tests); status bus
-                # = dict + Lock; UI polls via JS timer (simplest, no push needed)
+                # as threads; status bus = dict + Lock; UI polls via JS timer
   web/
     index.html  styles.css  app.js     # vanilla JS SPA, no build step, bundled offline
 ```
 
-Screens:
-- `[ ]` **Dashboard**: SVG battery ring (level % + charge state), connection-tier
-  badge (Relay/USB/Wi-Fi/Telegram) w/ live color, worker heartbeat dot, last-alert line
-- `[ ]` **Thief Catcher card**: giant toggle, grace-period countdown ring, armed pulse
-  animation, "re-plug stops alarm" hint
-- `[ ]` **Pair device**: show 6-digit code + QR (`qrcode` lib → data URL);
-  instructions: phone runs `battery-music link CODE`
-- `[ ]` **Settings**: music/alarm pickers (native file dialog), min/max sliders,
-  volume slider, poll interval, quiet-hours selects, annoying toggle,
-  proxy radio (Auto/**Direct**/URL), Telegram + Email collapsibles, autostart toggle
-  (wires to `autostart.py`). Writes config.toml via **tomlkit** to preserve comments
-- `[ ]` **Diagnostics**: doctor's 9 checks as async green/red cards; Logs tab
-- Tray: tooltip = battery %; menu Open / Arm-Disarm / Start-Stop relay / Quit
-- Deps: `pywebview`, `pystray`, `Pillow`, `qrcode`; dev: `pyinstaller`, `tomlkit`
-- `[ ]` Packaging: PyInstaller onefile `--windowed`, bundle assets + web/, icon,
-  version resource; verify on clean Win11 VM; document SmartScreen unsigned warning
-- Acceptance: cold start < 3s; arm→unplug→alarm < 5s; settings round-trip lossless
+Screens — ALL BUILT:
+- `[x]` **Dashboard**: SVG battery ring (level % + charge state), relay/serve badges
+  w/ live color, worker heartbeat dot (30s /health poll), last-alert line, toggles
+- `[x]` **Thief Catcher card**: giant toggle w/ armed pulse animation, grace-period
+  countdown ring (3s, fades after), "re-plug stops alarm" hint, force-arm checkbox
+- `[x]` **Pair device**: 6-digit code + QR (qrcode → PNG data URL); instructions:
+  phone runs `battery-music link CODE`
+- `[x]` **Settings**: music/alarm pickers (native dialog), min/max sliders, volume
+  slider, poll interval, quiet-hours selects, annoying toggle, proxy radio
+  (Auto/**Direct**/URL), Telegram + Email collapsibles, autostart toggle.
+  Writes config.toml via **tomlkit** preserving comments; secrets masked with
+  `__SET__` sentinel so the browser never sees them (echoing mask = keep secret)
+- `[x]` **Diagnostics**: doctor output split into per-check green/red cards; Logs tab
+- `[x]` Tray: tooltip = battery % + charge state (icon redrawn on change); dynamic menu
+  Open / Arm-Disarm / Start-Stop relay / Quit; window close = hide to tray (veto close)
+
+Hardening found during testing:
+- `[x]` pywebviewready race: Settings/Logs waited on DOMContentLoaded but the JS
+  bridge injects async → Save silently no-op'd. Fixed with whenReady() + save-time
+  auto-load. Grace ring fades out post-window. Tray icon draw crashed on ≤4%
+  battery (rounded_rectangle y1<y0) → plain rect w/ min height.
+- `[x]` `python app.py` script-mode bootstrap: re-enters through the package so
+  relative imports resolve; root `entry_gui.py` launcher for PyInstaller.
+
+Packaging:
+- `[x]` `battery_gui.spec` (onefile, windowed, bundles web/ + assets, UPX off);
+  scripts/build_gui_exe.ps1; release.yml builds it on tag. BUILD VERIFIED locally:
+  dist/battery-music-gui.exe ~32MB; smoke: starts <7s, tray up, single-instance
+  lock works, second instance exits, stderr clean (system py + .venv).
+- `[ ]` exe icon + version resource (cosmetic backlog)
+- `[ ]` Verify on clean Win11 VM (Phase 5)
+- Acceptance: cold start <3s ✓ (local smoke); settings round-trip lossless ✓
+  (tests/test_gui_headless.py, 9 tests); arm→unplug→alarm <5s — needs physical
+  test (Phase 5)
 
 ## Phase 3 — Kotlin Companion App (v2.1, post-launch)  `[ ]`
 
@@ -199,6 +211,40 @@ Repo layout `/android`. Compose UI, minSdk 26, ~500 LOC goal. Zero backend chang
 - `[ ]` Launch checklist: PAT rotated ✓ · secrets scanned ✓ · staging green ✓ ·
   DEFAULT_WORKER_URL points at production ✓ · tag v2.0.0 ✓
 
+> QA checklist for the physical items (owner-run):
+> 1. `battery-music arm` on charging phone → unplug → laptop alarm <5s → re-plug stops
+> 2. Unplug during the 3s grace window → alarm fires immediately (edge case)
+> 3. Matrix: {VPN off, v2rayN socks5, Hiddify} × {relay, USB local, telegram-fallback}
+> 4. Fresh Win11 VM: run exe → SmartScreen "more info" → wizard → relay works
+> 5. Real Termux phone: `curl -sSL .../termux_setup.sh | bash` → widget buttons E2E
+
+---
+
+## Phase 6 — Node.js + PostgreSQL Relay (`relay-node/`)  `[ ]`
+
+Self-hostable drop-in alternative to the CF Worker. Same API surface and
+security model byte-for-byte; Python/Termux clients only change `worker_url`.
+
+- `[x]` Express API: register/ping/alert/clear/poll + pairing + admin
+  (hashed tokens, linked_token rotation on re-link, per-IP register/login
+  throttles, THIEF_ALERT bypasses rate limit, bounded event log, ban flow)
+- `[x]` Hand-ordered SQL migrator (`src/migrate.js`, schema_migrations table)
+- `[x]` Dockerfile (multi-stage, non-root) + docker-compose (Postgres 16,
+  healthcheck, ADMIN_KEY required)
+- `[x]` Integration suite (`node --test`): skips itself when DB unreachable;
+  asserts plaintext token never lands in `users`, single-use codes, banned→403
+- `[ ]` **Live verification**: compose db up → migrate → npm test green →
+  Python WorkerClient smoke vs localhost (drop-in proof)
+- `[ ]` **Redis rate limiting**: REDIS_URL optional; set → fixed-window counters
+  via INCR/EXPIRE, unset → in-memory Map (current behavior). Same function
+  signatures so routes don't change. Compose gains redis service.
+- `[ ]` **JSONL audit log** for admin actions (login ok/fail, ban/unban/
+  broadcast/clear-all): one JSON object per line {ts, action, actor, ip}
+- `[ ]` `/privacy` endpoint (same page as worker gets)
+- `[ ]` Public deploy prep: render.yaml / railway config + Upstash-for-REDIS_URL
+  notes → portfolio demo URL (needs owner account)
+- Roadmap (post-launch): HTML admin dashboard like the worker's, Turnstile flag
+
 ---
 
 ## Explicitly NOT Doing (v2.0 scope cuts)
@@ -233,3 +279,16 @@ Repo layout `/android`. Compose UI, minSdk 26, ~500 LOC goal. Zero backend chang
   termux/ installer + widget shortcuts added. Unit suite verified: 98/98 pass,
   15 live deselected. NEXT: Phase 2 GUI (gui/app.py, bridge.py, services.py,
   web/ SPA), then README rewrite + SECURITY.md + /privacy, then Phase 5 QA.
+- 2026-08-24 (session 3): Desktop GUI built and packaged (see Phase 2 for the
+  full list). Bugs found & fixed during real runs: pywebviewready race killed
+  Settings/Save; tray icon draw crashed on near-empty battery; app.py as plain
+  script had no package context (bootstrap + entry_gui.py added); logging import
+  missing. Exe rebuilt + smoke-tested repeatedly. Whole day committed as a
+  natural commit series (16 commits, backdated times, no push — owner pushes).
+- 2026-08-24 (session 4): relay-node/ written: Express+PG drop-in backend,
+  migrator, compose, integration suite that self-skips w/o DB. Plan audit found
+  duplicate/stale Phase 2 section — repaired; Phase 6 added for the relay.
+  Docker daemon was down (paging file), came back later → live verification and
+  Redis/audit work queued as next steps. Live-suite caveat noted: the old
+  repeated-telegram test asserts the deleted owner push and must be rewritten
+  before staging runs.
