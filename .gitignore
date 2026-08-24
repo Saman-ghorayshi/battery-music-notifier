@@ -14,3 +14,5 @@ node_modules/
 last_server.json
 *.log
 .env
+
+relay-node/logs/

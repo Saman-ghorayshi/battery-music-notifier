@@ -5,8 +5,10 @@
 const express = require("express");
 const pool = require("../db");
 const config = require("../config");
-const { sha256, randomToken, now, clientIp, checkRateLimit, resetBucket } = require("../util");
+const { sha256, randomToken, now, clientIp } = require("../util");
+const { checkRateLimit, resetBucket } = require("../rateLimit");
 const { adminAuth, purgeExpired } = require("../auth");
+const audit = require("../audit");
 
 const router = express.Router();
 
@@ -17,15 +19,16 @@ router.post("/admin/login", async (req, res) => {
   }
   // Brute-force guard: max failed logins per IP per minute (reset on success).
   const ip = clientIp(req);
-  if (config.rateLimitEnabled && !checkRateLimit("alogin:" + ip, config.adminLoginMax)) {
+  if (config.rateLimitEnabled && !(await checkRateLimit("alogin:" + ip, config.adminLoginMax))) {
     return res.status(429).json({ ok: false, error: "rate_limited" });
   }
   const body = req.body || {};
   const provided = String(body.admin_key || "");
   if (provided.length < 10 || provided !== config.adminKey) {
+    audit(req, "admin_login_failed", { reason: "bad key" });
     return res.status(401).json({ ok: false, error: "invalid_key" });
   }
-  resetBucket("alogin:" + ip);
+  await resetBucket("alogin:" + ip);
 
   await purgeExpired(pool);
   const sessionKey = sha256(randomToken() + provided);
@@ -37,6 +40,7 @@ router.post("/admin/login", async (req, res) => {
                                               expires_at = EXCLUDED.expires_at`,
     [sessionKey, t, t + config.sessionTtlSec],
   );
+  audit(req, "admin_login", { ok: true });
   res.json({ ok: true, session_key: sessionKey, expires_in: config.sessionTtlSec });
 });
 
@@ -87,6 +91,7 @@ async function setBanned(req, res, value, word) {
   const userId = (req.body || {}).user_id;
   if (!userId) return res.status(400).json({ ok: false, error: "missing user_id" });
   await pool.query("UPDATE users SET is_banned = $1 WHERE user_id = $2", [value, userId]);
+  audit(req, word, { user_id: userId });
   const payload = { ok: true };
   payload[word] = userId;
   res.json(payload);
@@ -102,12 +107,14 @@ router.post("/admin/broadcast", async (req, res) => {
     "UPDATE users SET alert_active = 1, alert_type = $1, alert_ts = $2 WHERE is_banned = 0",
     [alertType, now()],
   );
+  audit(req, "broadcast", { alert_type: alertType });
   res.json({ ok: true, broadcast: alertType });
 });
 
 // ---- POST /admin/clear-all -----------------------------------------------------
-router.post("/admin/clear-all", async (_req, res) => {
+router.post("/admin/clear-all", async (req, res) => {
   await pool.query("UPDATE users SET alert_active = 0, alert_type = ''");
+  audit(req, "clear_all");
   res.json({ ok: true, cleared: true });
 });
 
