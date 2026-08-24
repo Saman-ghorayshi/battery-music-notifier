@@ -1,6 +1,7 @@
 # battery_notifier/diagnostics.py
 from __future__ import annotations
 import os
+import shutil
 import socket
 from pathlib import Path
 import requests
@@ -55,7 +56,9 @@ def run_doctor(cfg) -> bool:
 
     if cfg.proxy_url:
         # Validate format
-        if not (cfg.proxy_url.startswith("http://") or cfg.proxy_url.startswith("socks5://")):
+        if cfg.proxy_url.lower() in ("direct", "off", "none"):
+            print("   Configured:    direct (proxy auto-detection disabled)")
+        elif not (cfg.proxy_url.startswith("http://") or cfg.proxy_url.startswith("socks5://")):
             print(f"   MALFORMED: {cfg.proxy_url} (must start with http:// or socks5://)")
             all_clear = False
         else:
@@ -129,9 +132,11 @@ def run_doctor(cfg) -> bool:
         all_clear = False
 
     # Telegram API: use GET with stream=True
+    telegram_ok = False
     try:
         r = requests.get("https://api.telegram.org", proxies=proxies, timeout=4, stream=True)
-        if r.status_code < 500:
+        telegram_ok = r.status_code < 500
+        if telegram_ok:
             print(f"   Telegram API:    reachable (HTTP {r.status_code})")
         else:
             print(f"   Telegram API:    unexpected status {r.status_code}")
@@ -166,6 +171,7 @@ def run_doctor(cfg) -> bool:
 
     # ── Worker Relay ──
     print("\n [8] Worker Relay")
+    relay_reachable = False
     if cfg.worker_url:
         print(f"   URL:    {cfg.worker_url}")
         print(f"   Token:  {cfg.worker_token[:8] + '...' if cfg.worker_token else 'not set'}")
@@ -176,7 +182,8 @@ def run_doctor(cfg) -> bool:
             r = _req.get(f"{cfg.worker_url}/health",
                          proxies={"http": effective_proxy, "https": effective_proxy} if effective_proxy else None,
                          timeout=5)
-            if r.status_code == 200:
+            relay_reachable = r.status_code == 200
+            if relay_reachable:
                 print(f"   Health: reachable (HTTP {r.status_code})")
             else:
                 print(f"   Health: unexpected status {r.status_code}")
@@ -193,6 +200,27 @@ def run_doctor(cfg) -> bool:
         print("   Alarm sound: not set (will use music file)")
     print("   Arm command: battery-music arm --mode both")
     print("   Relay listen: battery-music relay")
+
+    # ── Per-Tier Verdict (Phase 1): how each transport fares RIGHT NOW ──
+    print("\n [10] Connection Tier Verdict (current network)")
+    if relay_reachable:
+        print("   Relay (HTTPS):   OK -- immune to VPN/proxy/NAT, recommended path")
+    else:
+        print("   Relay (HTTPS):   UNREACHABLE -- check internet, proxy, or worker URL")
+    if telegram_ok:
+        print("   Telegram cloud:  OK -- fallback channel ready")
+    else:
+        print("   Telegram cloud:  BLOCKED -- needs a working proxy on censored networks")
+    if shutil.which("adb"):
+        print("   USB (ADB):       adb present -- plug in the phone to bridge; VPN-immune")
+    else:
+        print("   USB (ADB):       adb not installed -- cable mode unavailable")
+    if env.is_vpn:
+        print(f"   Wi-Fi discovery: BLOCKED by VPN ({env.vpn_name}) -- use relay or USB")
+    elif env.subnet:
+        print("   Wi-Fi discovery: AVAILABLE -- same-LAN UDP beacon/subnet scan enabled")
+    else:
+        print("   Wi-Fi discovery: UNAVAILABLE -- no local network detected")
 
     # -- Summary --
     print("\n" + "=" * 55)
