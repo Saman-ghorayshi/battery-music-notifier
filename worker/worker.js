@@ -5,6 +5,8 @@
 const AUTH_PREFIX = "Bearer ";
 const RATE_LIMIT_WINDOW = 60; // seconds
 const RATE_LIMIT_MAX = 30; // requests per minute per user
+const REGISTER_RATE_MAX = 10; // registrations per minute per IP
+const ADMIN_LOGIN_MAX = 5; // failed admin logins per minute per IP
 const ADMIN_SESSION_TTL = 3600; // 1 hour
 const MAX_EVENTS_PER_USER = 200; // keep event log bounded
 
@@ -34,8 +36,7 @@ function now() { return Math.floor(Date.now() / 1000); }
 
 const rateBuckets = new Map();
 
-function checkRateLimit(userId) {
-  const key = userId;
+function checkRateLimit(key, max = RATE_LIMIT_MAX) {
   const t = now();
   const bucket = rateBuckets.get(key);
   if (!bucket || t - bucket.window_start > RATE_LIMIT_WINDOW) {
@@ -43,7 +44,11 @@ function checkRateLimit(userId) {
     return true;
   }
   bucket.count++;
-  return bucket.count <= RATE_LIMIT_MAX;
+  return bucket.count <= max;
+}
+
+function clientIp(request) {
+  return request.headers.get("CF-Connecting-IP") || "unknown";
 }
 
 // Clean stale rate buckets periodically (avoid memory bloat)
@@ -92,10 +97,13 @@ function html(content, status = 200) {
 async function authUser(request, db) {
   const authHeader = request.headers.get("Authorization") || "";
   if (!authHeader.startsWith(AUTH_PREFIX)) return null;
-  const token = authHeader.slice(AUTH_PREFIX.length).trim();
-  if (!token || token.length < 16) return null;
+  const rawToken = authHeader.slice(AUTH_PREFIX.length).trim();
+  if (!rawToken || rawToken.length < 16) return null;
+  // Tokens are stored only as sha256 hashes (users.token, users.linked_token).
+  const tokenHash = await sha256(rawToken);
   // Don't filter is_banned in SQL — return "banned" so the client gets a clear error
-  const user = await db.prepare("SELECT * FROM users WHERE token = ?").bind(token).first();
+  const user = await db.prepare("SELECT * FROM users WHERE token = ? OR linked_token = ?")
+    .bind(tokenHash, tokenHash).first();
   if (!user) return null;
   if (user.is_banned) return "banned";
   return user;
@@ -115,16 +123,21 @@ async function adminAuth(request, db) {
 
 // ---- Route handlers ----
 
-async function handleRegister(request, db) {
+async function handleRegister(request, db, env) {
+  // Per-IP throttle: once the URL is public, D1 would otherwise fill with junk rows
+  if (isRateLimitEnabled(env) && !checkRateLimit("reg:" + clientIp(request), REGISTER_RATE_MAX)) {
+    return json({ ok: false, error: "rate_limited" }, 429);
+  }
   const body = await request.json().catch(() => ({}));
   const deviceName = (body.device_name || "").slice(0, 100);
   const platform = (body.platform || "").slice(0, 50);
   const token = randomToken();
   const t = now();
 
+  // Store ONLY the sha256 hash; plaintext is returned to the client exactly once
   const result = await db.prepare(
     "INSERT INTO users (token, device_name, platform, created_at, last_seen) VALUES (?, ?, ?, ?, ?)"
-  ).bind(token, deviceName, platform, t, t).run();
+  ).bind(await sha256(token), deviceName, platform, t, t).run();
 
   return json({ ok: true, token, user_id: result.meta.last_row_id });
 }
@@ -170,44 +183,11 @@ async function handleSendAlert(request, db, user, env) {
     ).bind(user.user_id, excess).run();
   }
 
-  // Send Telegram notification if bot is configured
-  // Only notify for meaningful alerts, not every poll
-  if (env.telegram_token && env.chat_id) {
-    let tgText = "";
-    let urgent = false;
-    if (alertType === "THIEF_ALERT") {
-      tgText = "THIEF ALERT -- your phone may have been unplugged or stolen. Battery: " + batteryPct + "%";
-      urgent = true;
-    } else if (isCharging && batteryPct >= 80) {
-      tgText = "Battery charged to " + batteryPct + "%, unplug to save battery life";
-    } else if (!isCharging && batteryPct <= 20) {
-      tgText = "Battery low: " + batteryPct + "%, plug in your charger";
-    }
-    if (tgText && user.device_name) {
-      tgText = "[" + user.device_name + "] " + tgText;
-    }
-    if (tgText) {
-      try {
-        // Urgent alerts (thief) send 3 messages 5s apart so the phone keeps buzzing
-        // ponytail: fixed 3x repeat, add configurable repeat count if users need more
-        const repeats = urgent ? 3 : 1;
-        for (let i = 0; i < repeats; i++) {
-          await fetch("https://api.telegram.org/bot" + env.telegram_token + "/sendMessage", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chat_id: env.chat_id,
-              text: tgText,
-              disable_notification: false,
-            }),
-          });
-          if (i < repeats - 1) await new Promise(r => setTimeout(r, 5000));
-        }
-      } catch (e) {
-        // Telegram failed, but the alert is already in D1 -- not critical
-      }
-    }
-  }
+  // NOTE (v2.0): the old worker-wide Telegram push block was REMOVED.
+  // It spammed the owner chat with every user's alerts and leaked device
+  // names at scale. Each client now delivers its own notifications via
+  // battery_notifier/notifier.py (personal Telegram/email/desktop channels);
+  // this worker is a pure relay: store state, hand it back on poll.
 
   return json({ ok: true, alert_active: 1, alert_type: alertType });
 }
@@ -238,6 +218,11 @@ async function handleAdminLogin(request, db, env) {
   if (!env.ADMIN_KEY || env.ADMIN_KEY.length < 10) {
     return json({ ok: false, error: "admin_key_not_configured" }, 500);
   }
+  // Brute-force guard: max failed logins per IP per minute
+  const ip = clientIp(request);
+  if (!checkRateLimit("alogin:" + ip, ADMIN_LOGIN_MAX)) {
+    return json({ ok: false, error: "rate_limited" }, 429);
+  }
   const body = await request.json().catch(() => ({}));
   const adminKey = body.admin_key || "";
   if (!adminKey || adminKey.length < 10) {
@@ -248,6 +233,7 @@ async function handleAdminLogin(request, db, env) {
   if (expectedHash !== providedHash) {
     return json({ ok: false, error: "invalid_key" }, 401);
   }
+  rateBuckets.delete("alogin:" + ip); // success resets the failure counter
   const sessionKey = await sha256(randomToken() + adminKey);
   const t = now();
   await db.prepare(
@@ -312,21 +298,35 @@ async function handleAdminClearAll(db) {
 
 // ---- HTML Dashboard ----
 
+// Escape user-controlled values before interpolating into the dashboard.
+// device_name/platform come straight from unauthenticated /api/register.
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function dashboardHTML(data) {
   const s = data.stats;
-  const rows = (data.recent_users || []).map(u => `
+  const rows = (data.recent_users || []).map(u => {
+    const uid = escapeHtml(u.user_id);
+    return `
     <tr>
-      <td>${u.user_id}</td>
-      <td>${u.device_name || '-'}</td>
-      <td>${u.platform || '-'}</td>
+      <td>${uid}</td>
+      <td>${escapeHtml(u.device_name || '-')}</td>
+      <td>${escapeHtml(u.platform || '-')}</td>
       <td>${u.alert_active ? '<span class="alert">ACTIVE</span>' : 'idle'}</td>
-      <td>${u.alert_type || '-'}</td>
+      <td>${escapeHtml(u.alert_type || '-')}</td>
       <td>${u.battery_pct >= 0 ? u.battery_pct + '%' : '-'}</td>
       <td>${u.is_charging ? 'charging' : '-'}</td>
-      <td>${u.total_alerts}</td>
+      <td>${Number(u.total_alerts) || 0}</td>
       <td>${u.is_banned ? 'BANNED' : (u.is_pro ? 'PRO' : (u.is_founding ? 'FOUNDING' : 'free'))}</td>
-      <td><button class="ban-btn" data-uid="${u.user_id}">ban</button></td>
-    </tr>`).join("");
+      <td><button class="ban-btn" data-uid="${uid}">ban</button></td>
+    </tr>`;
+  }).join("");
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Battery Relay Admin</title>
@@ -426,10 +426,11 @@ async function handlePairGenerate(request, db, user) {
   // Generate a random 6-digit string
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = now() + 300; // 5 minutes from now
-  
-  await db.prepare("INSERT INTO pairing_codes (code, token, expires_at) VALUES (?, ?, ?)")
-    .bind(code, user.token, expiresAt).run();
-    
+
+  // Store the owning user's id only -- no tokens are ever stored in plaintext
+  await db.prepare("INSERT INTO pairing_codes (code, user_id, expires_at) VALUES (?, ?, ?)")
+    .bind(code, user.user_id, expiresAt).run();
+
   return json({ ok: true, code: code, expires_in: 300 });
 }
 
@@ -440,13 +441,20 @@ async function handlePairLink(request, db) {
 
   const record = await db.prepare("SELECT * FROM pairing_codes WHERE code = ? AND expires_at > ?")
     .bind(code, now()).first();
-    
+
   if (!record) return json({ ok: false, error: "invalid_or_expired" }, 404);
 
   // Single-use: Delete the code immediately so it can't be reused
   await db.prepare("DELETE FROM pairing_codes WHERE code = ?").bind(code).run();
 
-  return json({ ok: true, token: record.token });
+  // Mint a FRESH linked token for the joining device. Only its sha256 hash is
+  // persisted (users.linked_token); the plaintext is returned exactly once.
+  // Re-linking rotates the linked token, de-authorizing the previous phone.
+  const linkedToken = randomToken();
+  await db.prepare("UPDATE users SET linked_token = ?, last_seen = ? WHERE user_id = ?")
+    .bind(await sha256(linkedToken), now(), record.user_id).run();
+
+  return json({ ok: true, token: linkedToken });
 }
 // ---- Main router ----
 
@@ -462,8 +470,7 @@ export default {
     }
 
     // ---- Public API ----
-        // ---- Public API ----
-    if (path === "/api/register" && request.method === "POST") return handleRegister(request, db);
+    if (path === "/api/register" && request.method === "POST") return handleRegister(request, db, env);
     
     // 6-Digit Pairing System
     if (path === "/api/pair/generate" && request.method === "POST") {

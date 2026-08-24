@@ -79,11 +79,36 @@ other requests are unlimited.
 ## Security
 
 - 24-byte random tokens (Web Crypto API)
+- **Tokens stored only as SHA-256 hashes** in D1 (`users.token`, `users.linked_token`).
+  The plaintext is returned to the client exactly once (at register / pair-link).
+  A database leak therefore does not expose usable credentials.
 - Bearer auth on every API call
-- Rate limiting: 30 req/min/user (hosted only, THIEF_ALERT exempt)
+- Rate limiting: 30 req/min/user + 10 registrations/min/IP (hosted only, THIEF_ALERT exempt)
+- Admin login brute-force guard: max 5 failed attempts/min/IP, reset on success
+- Admin dashboard HTML-escapes all user-controlled fields (device_name, platform,
+  alert_type) -- protects against stored XSS from unauthenticated registrations
+- Pairing codes carry a `user_id`, never a token; linking mints a fresh hashed
+  `linked_token` for the phone and rotates it on re-link (old phone de-authorizes).
+  Codes are single-use and expire after 5 minutes.
+- No server-side Telegram push: each user configures personal notification
+  channels client-side (`battery-music init`). The worker is a pure relay.
 - Admin sessions: SHA-256 hashed, 1-hour TTL, expired sessions auto-cleaned from D1
 - Admin stats API excludes the `token` column -- user auth tokens are never exposed in dashboard data
 - Banned users blocked at auth layer
 - D1 database (SQLite, scales to 10k-50k users)
 - Event log bounded at 200 events per user
 - Health endpoint obscures API purpose
+
+## Migrating an existing deployment (pre-2.0.0)
+
+The v2.0.0 schema renamed `users.banned` -> `is_banned`, added `total_alerts`,
+`linked_token`, the `events` table and pairing-by-`user_id`. Fresh deploys just
+run `schema.sql`. Existing databases must run the one-shot migration:
+
+```bash
+npx wrangler d1 execute battery-relay-db --file=migration_v2.sql --remote
+```
+
+Re-run any statement that fails with "duplicate column name" -- that means it
+already applied. See comments in `schema.sql` for the token-hash cutover story
+(stale devices simply re-register on their next 401).
