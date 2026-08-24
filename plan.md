@@ -195,21 +195,22 @@ Repo layout `/android`. Compose UI, minSdk 26, ~500 LOC goal. Zero backend chang
   VPN matrix done ✓ but full rewrite pending GUI; SECURITY.md; `/privacy`
   page on worker
 
-## Phase 5 — QA Matrix & Launch  `[ ]`
+## Phase 5 — QA Matrix & Launch  `[*]`
 
-> Requires deployed staging worker + physical devices (with Saman). Unstarted.
-> Launch checklist reminder: PAT revoke still pending on owner (P0.1).
-
-- `[ ]` Deploy fixed worker to STAGING subdomain first; run full live suite vs it;
-  modest load test (register/poll burst ≤ CF limits); then production deploy
+- `[x]` Fixed worker deployed to STAGING first (`battery-relay-staging`), full
+  live suite green against it (14/14), then production deploy + 14/14 again.
+- `[x]` Production moved to the current CF account: battery-relay.sthidontknow.workers.dev
+  (old late-snow worker on the 600d5 account is orphaned -- delete whenever).
+  DEFAULT_WORKER_URL updated; live-suite default URL updated.
 - `[ ]` Device matrix (with Saman):
   {VPN off, v2rayN socks5, Hiddify} × {relay, USB local, telegram-fallback}
 - `[ ]` Physical thief test: phone charging + `arm` → unplug → laptop alarm < 5s;
   re-plug stops; grace-period edge (unplug during 3s grace fires immediately)
 - `[ ]` Fresh Windows VM: install exe, first-run wizard → working relay
 - `[ ]` Termux real phone: bootstrap script → widget buttons end-to-end
-- `[ ]` Launch checklist: PAT rotated ✓ · secrets scanned ✓ · staging green ✓ ·
-  DEFAULT_WORKER_URL points at production ✓ · tag v2.0.0 ✓
+- `[ ]` Push to GitHub (owner call) · tag v2.0.0 → release.yml builds the exe draft
+- `[x]` Launch checklist: PAT removed from git config ✓ (revoke at dashboard still
+  pending!) · secrets scanned ✓ · staging green ✓ · DEFAULT_WORKER_URL = prod ✓
 
 > QA checklist for the physical items (owner-run):
 > 1. `battery-music arm` on charging phone → unplug → laptop alarm <5s → re-plug stops
@@ -233,17 +234,25 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
   healthcheck, ADMIN_KEY required)
 - `[x]` Integration suite (`node --test`): skips itself when DB unreachable;
   asserts plaintext token never lands in `users`, single-use codes, banned→403
-- `[ ]` **Live verification**: compose db up → migrate → npm test green →
-  Python WorkerClient smoke vs localhost (drop-in proof)
-- `[ ]` **Redis rate limiting**: REDIS_URL optional; set → fixed-window counters
-  via INCR/EXPIRE, unset → in-memory Map (current behavior). Same function
-  signatures so routes don't change. Compose gains redis service.
-- `[ ]` **JSONL audit log** for admin actions (login ok/fail, ban/unban/
-  broadcast/clear-all): one JSON object per line {ts, action, actor, ip}
-- `[ ]` `/privacy` endpoint (same page as worker gets)
-- `[ ]` Public deploy prep: render.yaml / railway config + Upstash-for-REDIS_URL
-  notes → portfolio demo URL (needs owner account)
-- Roadmap (post-launch): HTML admin dashboard like the worker's, Turnstile flag
+- `[x]` **Live verification**: compose db up → migrate → npm test green (12 pass,
+  1 self-skip) → Python WorkerClient smoke vs localhost: register/ping/alert/
+  poll/clear + pairing all green. Drop-in proven.
+  Bugs found & fixed on the way: db port never published to host; `localhost`
+  resolves ::1 here and kills the pg handshake (pinned 127.0.0.1, host port
+  moved to 55432); bare router.use(adminAuth) made unknown paths 401 instead
+  of 404; test data collision banned a stranger row (unique per-run markers).
+- `[x]` **Redis rate limiting**: REDIS_URL optional; set → fixed-window counters
+  via INCR/EXPIRE, unset → in-memory Map (same signatures, routes unchanged).
+  Fail-open by design: a dead cache must never block a THIEF_ALERT.
+  Compose runs redis:7-alpine w/ healthcheck; verified live against it.
+- `[x]` **JSONL audit log** for admin actions (login ok/fail, ban/unban/
+  broadcast/clear-all): one JSON object per line {ts, action, ip, ...};
+  AUDIT_FILE overridable; tested.
+- `[x]` `/privacy` endpoint (plain-language data page, mirrors worker's)
+- `[x]` Public deploy prep: render.yaml blueprint (migrations chained into
+  start command), Railway notes, Upstash-for-REDIS_URL instructions.
+  Owner action when ready: create the Render/Railway account + Upstash, click deploy.
+- `[ ]` HTML admin dashboard like the worker's (post-launch roadmap)
 
 ---
 
@@ -292,3 +301,14 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
   Redis/audit work queued as next steps. Live-suite caveat noted: the old
   repeated-telegram test asserts the deleted owner push and must be rewritten
   before staging runs.
+- 2026-08-25 (session 5): EVERYTHING EXECUTED. Relay live-verified (12 pass +
+  Python drop-in smoke), Redis rate limiting + JSONL audit shipped and tested,
+  SECURITY.md + /privacy on both backends, live suite rewritten to v2.0
+  semantics. CF deploys done via pasted API token: staging worker + D1 created,
+  14/14 live vs staging, then PRODUCTION battery-relay.sthidontknow.workers.dev
+  deployed fresh on this account (old late-snow worker lives on another account
+  — orphaned, delete whenever) with 14/14 live again; DEFAULT_WORKER_URL cut
+  over. Render/Railway/Upstash prep for the public Node relay done.
+  REMAINING: owner pushes 22 commits · tag v2.0.0 · revoke BOTH the ghp_ PAT
+  and the cfut_ API token (both touched chat history) · physical QA checklist
+  in Phase 5 · optional: public relay deploy when Render account exists.
