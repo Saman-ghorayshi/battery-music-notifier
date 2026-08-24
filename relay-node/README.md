@@ -88,6 +88,18 @@ Any Node 18+ host works. Railway/Render/Fly: set the env vars from .env
 example, point DATABASE_URL at their managed Postgres, run `npm run migrate`
 once as a release command, done.
 
+**Render:** this folder ships a `render.yaml` blueprint -- push the repo to
+GitHub, then Render dashboard -> New -> Blueprint -> pick the repo. Fill in
+ADMIN_KEY when it asks; migrations run automatically on every deploy
+(startCommand chains them).
+
+**Railway:** `railway init` in this folder, add a Postgres plugin, set env
+vars, deploy -- same commands as above (`nixpacks` detects Node fine).
+
+**Redis for the public instance:** create a free Upstash database, paste its
+`rediss://...` URL as REDIS_URL. Now your rate-limit counters survive deploys
+and are shared if you scale to more than one instance.
+
 ## Roadmap
 
 - HTML admin dashboard like the worker has (CLI admin already works today)

@@ -1,0 +1,29 @@
+# Render blueprint: deploys the Node relay + managed Postgres.
+# Push this repo to GitHub, then in dashboard: New -> Blueprint -> pick repo.
+# Set ADMIN_KEY when prompted (min 10 chars). Optional: attach a Redis
+# instance and set REDIS_URL to share rate-limit counters across instances.
+services:
+  - type: web
+    name: battery-relay
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/migrate.js && node src/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: battery-relay-db
+          property: connectionString
+      - key: ADMIN_KEY
+        sync: false # you fill this in the dashboard; never commit it
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: REDIS_URL
+        sync: false
+
+databases:
+  - name: battery-relay-db
+    plan: free
+    databaseName: battery
+    user: battery
