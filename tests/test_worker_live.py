@@ -27,7 +27,7 @@ pytestmark = pytest.mark.live
 
 WORKER_URL = os.environ.get(
     "WORKER_URL",
-    "https://late-snow-3100.msi48vwsfhhy.workers.dev",
+    "https://battery-relay.sthidontknow.workers.dev",
 )
 
 

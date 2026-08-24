@@ -1,10 +1,13 @@
 name = "battery-relay"
-version = "1.0.0"
 main = "worker.js"
 compatibility_date = "2024-12-01"
+account_id = "676b8dc1e602b07651025cd852573949"
+workers_dev = true
 
 [[d1_databases]]
 binding = "DB"
 database_name = "battery-relay-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "633974ee-2bcd-41f6-aaa3-59660c003815"
 
+[vars]
+RATE_LIMIT_ENABLED = "true"

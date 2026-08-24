@@ -1,0 +1,16 @@
+# Staging deploy config -- isolated worker + database for pre-release testing.
+# Deploy:  npx wrangler deploy -c worker/wrangler.staging.toml
+name = "battery-relay-staging"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+account_id = "676b8dc1e602b07651025cd852573949"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "battery-relay-staging-db"
+database_id = "c1ccfa5c-f6f2-4baf-8ecb-568df4d7ff35"
+
+[vars]
+RATE_LIMIT_ENABLED = "true"
+ENVIRONMENT = "staging"
