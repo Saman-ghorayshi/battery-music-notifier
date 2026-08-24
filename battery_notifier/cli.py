@@ -4,6 +4,7 @@ import sys
 import logging
 import re
 from pathlib import Path
+from . import __version__
 from .config import Config, APP_DIR, DEFAULT_WORKER_URL, DEFAULT_ALARM_FILE
 from .logs import setup_logging
 from .monitor import Monitor
@@ -36,7 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="battery-music",
         description="Play music when battery reaches target.",
     )
-    p.add_argument("-V", "--version", action="version", version="%(prog)s 1.0.0")
+    p.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # start: one-command auto-detect (the smart entry point)
@@ -189,10 +190,10 @@ def main(argv=None) -> int:
         if not (0.0 <= volume <= 1.0):
             print("  [WARN] volume must be 0.0-1.0. Resetting to 0.8.")
             volume = 0.8
-        poll = ask_float("Enter poll interval in seconds [3.0]: ", 3.0)
+        poll = ask_float("Enter poll interval in seconds [10.0]: ", 10.0)
         if poll <= 0:
-            print("  [WARN] poll interval must be positive. Resetting to 3.0.")
-            poll = 3.0
+            print("  [WARN] poll interval must be positive. Resetting to 10.0.")
+            poll = 10.0
         annoying_ans = input("Loop music annoyingly until unplugged? (y/N): ").strip().lower()
         annoying = "true" if annoying_ans in ("y", "yes") else "false"
 
@@ -203,21 +204,32 @@ def main(argv=None) -> int:
             print("  [WARN] quiet hours must be 0-23. Resetting to 22/8.")
             quiet_start, quiet_end = 22, 8
 
-        print("\n [Network Proxy Configuration Settings]")
-        use_proxy = input("Do you need a proxy to bypass network blocks/Telegram restrictions? (y/N): ").strip().lower()
-        proxy_url = ""
-        if use_proxy in ("y", "yes"):
-            print("\nSelect your proxy core protocol:")
-            print("  [1] SOCKS5 (Recommended for v2rayN: 10808, Hiddify: 12334, Nekoray: 2080)")
-            print("  [2] HTTP   (Recommended for Clash: 7890, v2rayN HTTP: 10809)")
-            ptype = input("Choose protocol option [1]: ").strip() or "1"
-            host = input("Enter proxy connection host IP [127.0.0.1]: ").strip() or "127.0.0.1"
-            port = input("Enter proxy connection port number (e.g., 10808): ").strip()
-            while not port.isdigit():
-                print(" Invalid entry. Port must be numerical.")
-                port = input("Enter proxy connection port number: ").strip()
-            proto = "http" if ptype == "2" else "socks5"
-            proxy_url = f"{proto}://{host}:{port}"
+        # ── Connectivity: relay-first (Phase 1: VPN-proof by default) ──
+        # HTTPS relay works through any VPN/proxy/NAT; local sockets are the
+        # advanced fallback. Asked before the notification channels because it
+        # is the primary transport, not an optional extra.
+        print("\n [Connectivity: Worker Relay (recommended)]")
+        print("  Devices talk over plain HTTPS -- works through any VPN, proxy,")
+        print("  or censored network. This is the default path.")
+        print(f"  Default hosted worker: {DEFAULT_WORKER_URL}")
+        print("  (Already configured. Just press Enter to use it.)")
+        print("  Paranoid? Self-host later: see worker/README.md for instructions.")
+        worker_url = DEFAULT_WORKER_URL
+        worker_token = ""
+        admin_key = ""
+        w_ans = input("Use default hosted worker? (Y/n): ").strip().lower()
+        if w_ans in ("n", "no"):
+            worker_url = input("  Enter your self-hosted worker URL: ").strip()
+            wt_ans = input("  Do you already have a token? (y/N): ").strip().lower()
+            if wt_ans in ("y", "yes"):
+                worker_token = input("  Enter your worker token: ").strip()
+            ak_ans = input("  Enter admin key (or press Enter to skip): ").strip()
+            if ak_ans:
+                admin_key = ak_ans
+        else:
+            ak_ans = input("  Enter admin key (optional, for admin commands): ").strip()
+            if ak_ans:
+                admin_key = ak_ans
 
         print("\n [Telegram Notification Setup]")
         print("  Get token from @BotFather, chat ID from @userinfobot")
@@ -246,29 +258,6 @@ def main(argv=None) -> int:
         autostart_ans = input("\nDo you want to automatically start this app on boot? (y/N): ").strip().lower()
         enable_auto = autostart_ans in ("y", "yes")
 
-        # Worker relay setup
-        print("\n [Worker Relay Setup]")
-        print("  A worker relay lets devices talk over the internet (no local network needed).")
-        print(f"  Default hosted worker: {DEFAULT_WORKER_URL}")
-        print("  (Already configured. Just press Enter to use it.)")
-        print("  Paranoid? Self-host: see worker/README.md for instructions.")
-        worker_url = DEFAULT_WORKER_URL
-        worker_token = ""
-        admin_key = ""
-        w_ans = input("Use default hosted worker? (Y/n): ").strip().lower()
-        if w_ans in ("n", "no"):
-            worker_url = input("  Enter your self-hosted worker URL: ").strip()
-            wt_ans = input("  Do you already have a token? (y/N): ").strip().lower()
-            if wt_ans in ("y", "yes"):
-                worker_token = input("  Enter your worker token: ").strip()
-            ak_ans = input("  Enter admin key (or press Enter to skip): ").strip()
-            if ak_ans:
-                admin_key = ak_ans
-        else:
-            ak_ans = input("  Enter admin key (optional, for admin commands): ").strip()
-            if ak_ans:
-                admin_key = ak_ans
-
         # Thief catcher alarm sound
         print("\n [Thief Catcher Alarm Sound]")
         print(f"  Default alarm bundled at: assets/default_alarm.wav")
@@ -278,8 +267,31 @@ def main(argv=None) -> int:
         if al_ans in ("y", "yes"):
             alarm_path = input("  Enter path to alarm sound file: ").strip()
 
-        # Local socket shared secret (optional security feature)
-        print("\n [Local Socket Security]")
+        # ── Advanced: direct LAN / proxy tuning (relay covers most users) ──
+        print("\n [Advanced: Network Proxy]")
+        print("  Auto-detect is on by default (finds v2rayN/Hiddify/Clash locally).")
+        use_proxy = input("Configure a proxy manually? (y/N): ").strip().lower()
+        proxy_url = ""
+        if use_proxy in ("y", "yes"):
+            print("\nSelect your proxy core protocol:")
+            print("  [1] SOCKS5 (Recommended for v2rayN: 10808, Hiddify: 12334, Nekoray: 2080)")
+            print("  [2] HTTP   (Recommended for Clash: 7890, v2rayN HTTP: 10809)")
+            print("  [3] Direct (never use a proxy -- disables auto-detection too)")
+            ptype = input("Choose protocol option [1]: ").strip() or "1"
+            if ptype == "3":
+                proxy_url = "direct"
+            else:
+                host = input("Enter proxy connection host IP [127.0.0.1]: ").strip() or "127.0.0.1"
+                port = input("Enter proxy connection port number (e.g., 10808): ").strip()
+                while not port.isdigit():
+                    print(" Invalid entry. Port must be numerical.")
+                    port = input("Enter proxy connection port number: ").strip()
+                proto = "http" if ptype == "2" else "socks5"
+                proxy_url = f"{proto}://{host}:{port}"
+
+        # Local socket shared secret (optional security feature, LAN modes only)
+        print("\n [Advanced: Local Socket Security]")
+        print("  Only relevant for same-LAN socket mode (relay users can skip).")
         print("  Optional: set a shared secret to prevent LAN attackers from")
         print("  sending STOP to silence the thief-catcher alarm.")
         socket_secret = ""
