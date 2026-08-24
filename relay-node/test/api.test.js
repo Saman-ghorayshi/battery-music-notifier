@@ -13,10 +13,10 @@ process.env.RATE_LIMIT_ENABLED = "false"; // throttles would flake the tests
 const request = require("supertest");
 const { Pool } = require("pg");
 
-async function newUser(base) {
+async function newUser(base, name = "test-laptop") {
   const r = await request(base)
     .post("/api/register")
-    .send({ device_name: "test-laptop", platform: "test" });
+    .send({ device_name: name, platform: "test" });
   assert.equal(r.status, 200);
   assert.match(r.body.token, /^[0-9a-f]{48}$/);
   return r.body.token;
@@ -119,7 +119,10 @@ test("relay api", async (t) => {
   });
 
   await t.test("admin login + stats + ban/unban", async () => {
-    const token = await newUser(base);
+    // unique marker: the db keeps old runs' users around, find() must not
+    // match one of those or we ban a stranger and our token stays valid
+    const marker = `test-laptop-${Date.now()}`;
+    const token = await newUser(base, marker);
     const login = await request(base)
       .post("/admin/login")
       .send({ admin_key: process.env.ADMIN_KEY });
@@ -135,7 +138,7 @@ test("relay api", async (t) => {
     assert.equal(s.status, 200);
     assert.ok(s.body.stats.total_users >= 1);
 
-    const me = s.body.recent_users.find((u) => u.device_name === "test-laptop");
+    const me = s.body.recent_users.find((u) => u.device_name === marker);
     assert.ok(me, "registered user missing from recent_users");
     const ban = await request(base).post("/admin/ban").set(h).send({ user_id: me.user_id });
     assert.equal(ban.status, 200);
