@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create the GitHub Release and upload assets
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package + build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,audio,gui]"
+      - name: Build onefile windowed GUI exe
+        run: pyinstaller battery_gui.spec --noconfirm
+        shell: pwsh
+      - name: Smoke test build output
+        run: if (-not (Test-Path dist/battery-music-gui.exe)) { Write-Error "exe missing"; exit 1 }
+        shell: pwsh
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: battery-music-gui-windows-exe
+          path: dist/battery-music-gui.exe
+
+  github-release:
+    needs: build-windows-exe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built exe
+        uses: actions/download-artifact@v4
+        with:
+          name: battery-music-gui-windows-exe
+          path: dist
+      - name: Create GitHub Release with exe attached
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/battery-music-gui.exe
+          generate_release_notes: true
+          draft: true # owner reviews, then publishes (SmartScreen note goes in body)
