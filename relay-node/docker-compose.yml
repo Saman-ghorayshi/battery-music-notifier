@@ -5,6 +5,10 @@ services:
       POSTGRES_USER: battery
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-battery}
       POSTGRES_DB: battery
+    ports:
+      # NOT 5432: dev machines often run their own postgres (WSL2, supabase etc.)
+      # and localhost:5432 would silently hit that one instead of ours.
+      - "55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

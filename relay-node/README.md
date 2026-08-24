@@ -74,7 +74,7 @@ Integration tests need a reachable Postgres (they skip themselves if the DB
 is down):
 
     docker compose up -d db
-    DATABASE_URL=postgres://battery:battery@localhost:5432/battery npm test
+    DATABASE_URL=postgres://battery:battery@127.0.0.1:55432/battery npm test
 
 ## Deploying elsewhere
 

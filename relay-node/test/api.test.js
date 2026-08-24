@@ -6,7 +6,7 @@ const assert = require("node:assert");
 
 process.env.PORT = "0"; // ephemeral port per test run
 process.env.DATABASE_URL =
-  process.env.DATABASE_URL || "postgres://battery:battery@localhost:5432/battery";
+  process.env.DATABASE_URL || "postgres://battery:battery@127.0.0.1:55432/battery";
 process.env.ADMIN_KEY = process.env.ADMIN_KEY || "test-admin-key-123";
 process.env.RATE_LIMIT_ENABLED = "false"; // throttles would flake the tests
 

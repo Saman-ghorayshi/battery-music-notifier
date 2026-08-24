@@ -8,7 +8,9 @@ function num(name, def) {
 
 module.exports = {
   port: num("PORT", 8787),
-  databaseUrl: process.env.DATABASE_URL || "postgres://battery:battery@localhost:5432/battery",
+  // 127.0.0.1 on purpose: on Windows, `localhost` may resolve to ::1 first
+  // and WSL2/docker port proxies are IPv4-only -> mysterious disconnects.
+  databaseUrl: process.env.DATABASE_URL || "postgres://battery:battery@127.0.0.1:55432/battery",
   adminKey: process.env.ADMIN_KEY || "",
   rateLimitEnabled: process.env.RATE_LIMIT_ENABLED !== "false",
 
