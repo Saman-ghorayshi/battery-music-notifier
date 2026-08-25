@@ -17,6 +17,30 @@ Everything else in this file is polish or post-launch.
 
 ---
 
+## 🗺️ THE ROAD AHEAD — execution order (READ THIS FIRST)
+
+> You are here: **code complete & verified.** Nothing is left to *build* for
+> v2.0. What remains is SHIPPING + PROOF + then your attention moves to the
+> other projects. Every step below has an exact-command runbook.
+
+| # | Step | Details live in | Your time |
+|---|---|---|---|
+| 0 | Reboot PC (heals the WMI wedge at root) | — | 5 min |
+| 1 | Rotate leaked secrets | **LAUNCH_RUNBOOK.md §1** | 10 min |
+| 2 | **Ship v2.0.0**: push → tag → CI exe → publish release | **LAUNCH_RUNBOOK.md §2–§5** | 25 min |
+| 3 | Go live: relay-node public URL on Render | **LAUNCH_RUNBOOK.md §6** | 15 min |
+| 4 | Record + embed the README hero GIF | **LAUNCH_RUNBOOK.md §7** | 40 min |
+| 5 | **Freeze this repo** — features done; bugfixes only | — | — |
+| 6 | Portfolio packaging (case studies, resume bullets, hub site) | **PORTFOLIO.md** | 1 session |
+| 7 | Hardware QA (thief pull-test, device matrix, clean VM, Termux) | Phase 5 checklist | needs Saman/phone |
+| 8 | Next-project breadth: WhaleSignal go-live → Sentinel polish → steg detector | **PORTFOLIO.md §order** | ongoing |
+| 9 | Kotlin companion app 3a→3d | Phase 3 spec above | only if mobile focus |
+
+Rule going forward: **no new features in this repo.** It is finished; its value
+is realized by shipping it and talking about it, not by adding to it.
+
+---
+
 ## Locked Decisions
 
 | Decision | Choice |
@@ -541,6 +565,13 @@ Turnstile widget (breaks CLI headless clients) · register PoW challenge
 - ❌ iOS anything
 
 ## Session Log (context for future sessions)
+
+- 2026-08-25 (session 8, wrap): Added THE ROAD AHEAD execution table (top of
+  file), LAUNCH_RUNBOOK.md (push/tag/release/Render/GIF with exact commands),
+  PORTFOLIO.md (8 project case studies + EN resume bullets + hub-site
+  blueprint + presentation order). Battery repo is now FROZEN for features —
+  next work happens in: launch steps → WhaleSignal → Sentinel polish → hub
+  site. Kotlin Phase 3a starts only on owner request.
 
 - 2026-08-25 (session 8, planning): Backlog + Phase 3 spec'd in full detail
   for agent handoff — SESSION A (exe icon/version + relay HTML dashboard),
