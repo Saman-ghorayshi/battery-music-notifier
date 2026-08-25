@@ -312,3 +312,15 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
   REMAINING: owner pushes 22 commits · tag v2.0.0 · revoke BOTH the ghp_ PAT
   and the cfut_ API token (both touched chat history) · physical QA checklist
   in Phase 5 · optional: public relay deploy when Render account exists.
+- 2026-08-25 (session 6): Fresh verification sweep caught a REAL regression —
+  stop() insertion had swallowed RemoteMonitor's battery init; client loop
+  crashed every iteration since the GUI session. Fixed; full suite green again
+  (107 unit + 12 relay). CF "403" scare diagnosed as Bot Fight Mode blocking
+  bare Python-urllib UA only (real clients fine). Proxy smarts extended:
+  get_effective_proxy now honors HTTPS_PROXY/HTTP_PROXY/ALL_PROXY env vars
+  between explicit config and port-scan tiers ("direct" opt-out still supreme);
+  10 new tests pin the matrix. Docs: Docker demoted to optional self-host
+  sugar, platforms matrix added, censorship playbook (wrangler/pip via http
+  proxy port 10809, custom-domain route for blocked workers.dev) written into
+  README. iOS stance documented honestly: Shortcuts automation workaround now,
+  native app = post-v2.1 idea.
