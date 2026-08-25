@@ -8,14 +8,58 @@ import time
 import socket
 import shutil
 import logging
-import platform
 import threading
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Optional
 
 from .config import sanitize_proxy_url
-from typing import Optional
+from .sysprobe import safe_system as _safe_system
+
+_platform_system_cache = None
+
+# Circuit breaker: once one powershell probe wedges, skip all further ones
+# for this process. A wedged WMI/PowerShell stack stays wedged.
+_ps_wedged = False
+
+
+def _bounded_run(args, timeout=5.0) -> str:
+    """subprocess.run that survives children holding the pipes.
+
+    Plain run(timeout=) can't reap a powershell that spawned its own
+    children (they inherit stdout/stderr, communicate() waits for EOF).
+    We kill the whole tree with taskkill /T instead.
+    """
+    global _ps_wedged
+    if _ps_wedged and args and "powershell" in str(args[0]).lower():
+        return ""
+    p = subprocess.Popen(args, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+        return out or ""
+    except subprocess.TimeoutExpired:
+        _ps_wedged = True
+        log.warning("subprocess %s timed out; killing tree and skipping "
+                    "further powershell probes", args[0])
+        try:
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+        return ""
+
+
+def safe_platform_system() -> str:
+    """platform.system() that can never hang the app (see sysprobe)."""
+    global _platform_system_cache
+    if _platform_system_cache is not None:
+        return _platform_system_cache
+    from .sysprobe import safe_system
+    _platform_system_cache = safe_system()
+    return _platform_system_cache
+
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +116,7 @@ def detect_environment() -> Environment:
         or bool(shutil.which("termux-battery-status"))
     )
     is_android = is_termux or "ANDROID_ROOT" in os.environ
-    sys_name = platform.system()
+    sys_name = safe_platform_system()
     is_windows = sys_name == "Windows"
     is_linux = sys_name == "Linux" and not is_android
     is_macos = sys_name == "Darwin"
@@ -188,23 +232,19 @@ def _detect_vpn_windows() -> tuple[bool, Optional[str]]:
               "|Proton|ExpressVPN|ZenMate")
     # Try PowerShell first for adapter names
     try:
-        result = subprocess.run(
-            ["powershell", "-Command",
+        out = _bounded_run(
+            ["powershell", "-NoProfile", "-Command",
              f"Get-NetAdapter | Where-Object {{$_.InterfaceDescription -match '{win_kw}'}} | Select-Object -ExpandProperty Name"],
-            capture_output=True, text=True, timeout=5,
-        )
-        names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
+            timeout=5)
+        names = [n.strip() for n in out.strip().split("\n") if n.strip()]
         if names:
             return True, names[0]
     except Exception:
         pass
 
-    # Fallback: ipconfig
+    # Fallback: ipconfig (never powershell; safe when PS is wedged)
     try:
-        result = subprocess.run(
-            ["ipconfig", "/all"], capture_output=True, text=True, timeout=5
-        )
-        output = result.stdout.lower()
+        output = _bounded_run(["ipconfig", "/all"], timeout=5).lower()
         vpn_keywords = [
             "wintun", "tap-windows", "openvpn", "wireguard", "vpn adapter",
             "cloudflare warp", "warp", "tailscale", "mullvad", "nordlynx",

@@ -8,17 +8,29 @@ client role: ping_server + send_command_with_ack(THIEF_ALERT), assert ACK.
     python tests/cross_os_socket.py server <port> <expected_cmd>
     python tests/cross_os_socket.py client <host> <port> <cmd>
 """
+import os
 import sys
 import threading
 import time
 
 
 def main():
-    role = sys.argv[1]
+    import faulthandler
+    faulthandler.dump_traceback_later(40, exit=True)
+    # Env overrides win because they survive every launcher (argv gets
+    # shaved by some wsl/Start-Process combinations). Positional args are
+    # ROLE-SPECIFIC: server = port cmd [marker]; client = host port cmd.
+    role = os.environ.get("SOCK_ROLE") or sys.argv[1]
+    if role == "server":
+        port = int(os.environ.get("SOCK_PORT") or (sys.argv[2] if len(sys.argv) > 2 else 8803))
+        expected = os.environ.get("SOCK_EXPECTED") or (sys.argv[3] if len(sys.argv) > 3 else "THIEF_ALERT")
+        marker = os.environ.get("SOCK_MARKER") or (sys.argv[4] if len(sys.argv) > 4 else None)
+    else:
+        host = os.environ.get("SOCK_HOST") or (sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1")
+        port = int(os.environ.get("SOCK_PORT") or (sys.argv[3] if len(sys.argv) > 3 else 8803))
+        cmd = os.environ.get("SOCK_CMD") or (sys.argv[4] if len(sys.argv) > 4 else "THIEF_ALERT")
 
     if role == "server":
-        port = int(sys.argv[2])
-        expected = sys.argv[3]
         from battery_notifier.config import Config
         from battery_notifier.remote import NotificationServer
 
@@ -49,8 +61,12 @@ def main():
         sock.bind(("0.0.0.0", port))
         sock.listen(4)
         sock.settimeout(20)
+        if marker:
+            with open(marker, "w") as f:
+                f.write("ready")
+            print(f"READY marker written for :{port}", flush=True)
         print(f"SOCKET-SERVER ready on :{port} expecting {expected}", flush=True)
-        end_at = time.time() + 20
+        end_at = time.time() + 30
         while time.time() < end_at and not got.is_set():
             try:
                 conn, addr = sock.accept()
@@ -72,7 +88,6 @@ def main():
         sys.exit(2)
 
     # ---- client ----
-    host, port, cmd = sys.argv[2], int(sys.argv[3]), sys.argv[4]
     from battery_notifier.connection import ping_server, send_command_with_ack
 
     if not ping_server(host, port, timeout=3.0):

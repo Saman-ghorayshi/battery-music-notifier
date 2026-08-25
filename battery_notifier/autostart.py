@@ -1,7 +1,9 @@
 """Cross-platform auto-start configuration."""
 from __future__ import annotations
-import os, platform, logging
+import os, logging
 from pathlib import Path
+
+from .sysprobe import safe_system as _safe_system
 
 log = logging.getLogger(__name__)
 
@@ -9,11 +11,11 @@ APP_NAME = "Battery Music Notifier"
 
 
 def _is_windows() -> bool:
-    return platform.system() == "Windows"
+    return _safe_system() == "Windows"
 
 
 def _is_macos() -> bool:
-    return platform.system() == "Darwin"
+    return _safe_system() == "Darwin"
 
 
 def _get_startup_path() -> Path:

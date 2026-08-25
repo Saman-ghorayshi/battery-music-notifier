@@ -27,6 +27,7 @@ def _client(url, token=""):
 
 
 def main():
+    print(f"[boot] role={sys.argv[1]} pid={os.getpid()}", flush=True)
     role, marker = sys.argv[1], os.path.abspath(sys.argv[2])
     url = sys.argv[3] if len(sys.argv) > 3 else "https://battery-relay-staging.sthidontknow.workers.dev"
     tag = f"{role}-{os.name}-{int(time.time())}"
@@ -38,7 +39,24 @@ def main():
         sys.exit(2)
 
     if role == "send":
-        time.sleep(1.5)  # let the listener start polling first
+        # the listener publishes ITS token in the marker -- thief alerts must
+        # land on the same account the victim polls (that's what pairing does)
+        token = None
+        deadline = time.time() + 45
+        while time.time() < deadline and not token:
+            try:
+                cand = open(marker).read().strip()
+                if len(cand) >= 32 and set(cand) <= set("0123456789abcdef"):
+                    token = cand
+                    break
+            except FileNotFoundError:
+                pass
+            time.sleep(0.5)
+        if not token:
+            print("RESULT: no listener token appeared in marker")
+            sys.exit(2)
+        wc.token = token
+        time.sleep(1.0)
         t0 = time.time()
         with open(marker, "w") as f:
             f.write(str(t0))
@@ -51,7 +69,11 @@ def main():
         sys.exit(0)
 
     # ---- listen ----
-    deadline = time.time() + 25
+    # publish our token so the other OS can impersonate this account
+    with open(marker, "w") as f:
+        f.write(token)
+    print(f"LISTENING token={token[:8]}... wrote marker", flush=True)
+    deadline = time.time() + 40
     while time.time() < deadline:
         resp = wc.poll()
         if resp.get("error") == "rate_limited":

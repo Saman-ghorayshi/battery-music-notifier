@@ -15,6 +15,14 @@ def _clean_proxy_env(monkeypatch):
                   "ALL_PROXY", "all_proxy"):
         monkeypatch.delenv(_name, raising=False)
 
+
+@pytest.fixture(autouse=True)
+def _reset_connection_breakers(monkeypatch):
+    """Keep the WMI/PowerShell circuit breakers fresh per test."""
+    import battery_notifier.connection as _conn
+    monkeypatch.setattr(_conn, "_ps_wedged", False)
+    monkeypatch.setattr(_conn, "_platform_system_cache", None)
+
 from battery_notifier.remote import (
     RemoteMonitor,
     NotificationServer,
@@ -445,10 +453,10 @@ def test_detect_vpn_android_no_vpn(mock_listdir):
     assert name is None
 
 
-@patch("subprocess.run")
+@patch("battery_notifier.connection._bounded_run")
 def test_detect_vpn_windows_powershell(mock_run):
     """VPN detection on Windows uses PowerShell adapter names."""
-    mock_run.return_value = MagicMock(stdout="Wintun Userspace Tunnel\n", stderr="")
+    mock_run.return_value = "Wintun Userspace Tunnel\n"
     is_vpn, name = _detect_vpn(
         is_termux=False, is_android=False,
         is_windows=True, is_linux=False, is_macos=False
@@ -457,10 +465,10 @@ def test_detect_vpn_windows_powershell(mock_run):
     assert "Wintun" in name
 
 
-@patch("subprocess.run")
+@patch("battery_notifier.connection._bounded_run")
 def test_detect_vpn_windows_no_vpn(mock_run):
     """VPN detection on Windows returns False when no VPN adapter found."""
-    mock_run.return_value = MagicMock(stdout="", stderr="")
+    mock_run.return_value = ""
     is_vpn, name = _detect_vpn(
         is_termux=False, is_android=False,
         is_windows=True, is_linux=False, is_macos=False

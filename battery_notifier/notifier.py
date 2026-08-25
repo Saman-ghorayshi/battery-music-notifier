@@ -1,19 +1,29 @@
 from __future__ import annotations
-import platform, logging, smtplib
+import logging, smtplib
 from email.mime.text import MIMEText
 import requests
+
+from .sysprobe import safe_system as _safe_system
+from .sysprobe import wmi_wedged as _wmi_wedged
 
 log = logging.getLogger(__name__)
 
 class Notifier:
     def __init__(self, cfg=None):
         self.cfg = cfg
-        self.system = platform.system()
+        self.system = _safe_system()
         self._impl = self._init_impl()
 
     def _init_impl(self):
         try:
             if self.system == "Windows":
+                # win10toast imports pkg_resources which calls
+                # platform.system() at import time -- that hangs forever
+                # while WMI is wedged, so skip the toast backend entirely.
+                from .sysprobe import wmi_wedged
+                if wmi_wedged:
+                    log.warning("WMI wedged: disabling toast notifications")
+                    return None
                 from win10toast import ToastNotifier
                 return ToastNotifier()
             if self.system == "Darwin":
