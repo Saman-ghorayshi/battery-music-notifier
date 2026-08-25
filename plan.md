@@ -241,6 +241,16 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
   resolves ::1 here and kills the pg handshake (pinned 127.0.0.1, host port
   moved to 55432); bare router.use(adminAuth) made unknown paths 401 instead
   of 404; test data collision banned a stranger row (unique per-run markers).
+- `[x]` **Native-Linux no-Docker proof**: whole relay copied into WSL Debian,
+  `npm install` + migrate + serve natively against the system Postgres —
+  register/THIEF_ALERT/poll round-trip green. No containers anywhere.
+- `[x]` **Adversarial live suite** (`tests/test_worker_adversarial.py`, 17 tests,
+  staging+prod): stored-XSS escape check via real dashboard HTML, mixed-case
+  THIEF_ALERT bypass after flood, re-link kicks old phone while laptop token
+  survives, auth boundary variants, 1MB body, non-JSON body, extreme battery
+  values, pair-code boundaries, CORS preflight, telemetry counters move.
+  Hardening shipped from its findings: crypto-random pairing codes
+  (Math.random was predictable), alert_type trimmed before normalization.
 - `[x]` **Redis rate limiting**: REDIS_URL optional; set → fixed-window counters
   via INCR/EXPIRE, unset → in-memory Map (same signatures, routes unchanged).
   Fail-open by design: a dead cache must never block a THIEF_ALERT.
