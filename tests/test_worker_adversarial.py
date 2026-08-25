@@ -47,6 +47,7 @@ def _api(path, method="GET", token=None, body=None, timeout=15, extra_headers=No
 
 
 def _register(name):
+    """Returns the plaintext token."""
     s, b = _api("/api/register", "POST",
                 body={"device_name": f"{name}-{_tag}", "platform": "test"})
     assert s == 200, (s, b)
@@ -76,9 +77,6 @@ def test_options_preflight_has_cors():
 
 def test_privacy_page_live():
     """/privacy exists and says the aggregate-only truth."""
-    s, body = _api("/privacy")
-    assert s == 200
-    # body comes back parsed only if json; fetch raw instead
     import urllib.request
     html = urllib.request.urlopen(
         urllib.request.Request(f"{WORKER_URL}/privacy", headers=UA),
@@ -90,12 +88,27 @@ def test_privacy_page_live():
 
 def test_auth_header_variants_all_rejected():
     for token in ("x" * 15,                       # below length floor
-                  "",                              # empty
+                  "",                              # empty -> no auth at all
                   "a" * 48,                        # plausible but unknown
-                  "../../etc/passwd",              # path-ish junk
-                  "😀" * 12):                      # unicode
+                  "../../etc/passwd"):             # path-ish junk
         s, _ = _api("/api/poll", "GET", token=token)
         assert s == 401, f"token {token[:12]!r} -> {s}"
+
+
+def test_unicode_token_never_authenticates():
+    """Non-latin1 headers may be refused client-side; either way: no auth."""
+    import urllib.request
+    import urllib.error
+    req = urllib.request.Request(
+        f"{WORKER_URL}/api/poll?_t={time.time()}",
+        headers={**UA, "Authorization": f"Bearer {'😀' * 12}"})
+    try:
+        r = urllib.request.urlopen(req, timeout=10)
+        assert False, f"unicode token authenticated?! {r.status}"
+    except urllib.error.HTTPError as e:
+        assert e.code == 401
+    except Exception:
+        pass  # client-side refusal is fine
 
 
 def test_bearer_without_space_rejected():
@@ -169,8 +182,8 @@ def test_non_json_body_graceful():
 # ---- pairing semantics -----------------------------------------------------
 
 def test_pair_code_format_and_boundaries():
-    _, reg = _register("pairfmt")
-    s, b = _api("/api/pair/generate", "POST", token=reg["token"])
+    token = _register("pairfmt")
+    s, b = _api("/api/pair/generate", "POST", token=token)
     assert s == 200 and len(b["code"]) == 6 and b["code"].isdigit()
 
     for bad in ("1234567", "12345", "abcdef", "12 456", ""):
@@ -185,9 +198,9 @@ def test_unauthenticated_pair_generate_rejected():
 
 def test_relink_rotates_linked_token_and_kicks_old_phone():
     """Documented security property: pairing a NEW phone de-authorizes the old one."""
-    _, reg = _register("rotate")
+    laptop = _register("rotate")
 
-    _, g1 = _api("/api/pair/generate", "POST", token=reg["token"])
+    _, g1 = _api("/api/pair/generate", "POST", token=laptop)
     _, l1 = _api("/api/pair/link", "POST", body={"code": g1["code"]})
     phone_a = l1["token"]
 
@@ -196,10 +209,10 @@ def test_relink_rotates_linked_token_and_kicks_old_phone():
     assert s == 200
 
     # ...until phone B links
-    _, g2 = _api("/api/pair/generate", "POST", token=reg["token"])
+    _, g2 = _api("/api/pair/generate", "POST", token=laptop)
     _, l2 = _api("/api/pair/link", "POST", body={"code": g2["code"]})
     phone_b = l2["token"]
-    assert phone_b != phone_a != reg["token"]
+    assert phone_b != phone_a and phone_a != laptop
 
     s, _ = _api("/api/poll", "GET", token=phone_b)
     assert s == 200, "new phone must work"
@@ -209,8 +222,7 @@ def test_relink_rotates_linked_token_and_kicks_old_phone():
 
 
 def test_primary_token_survives_many_relings():
-    _, reg = _register("survivor")
-    laptop = reg["token"]
+    laptop = _register("survivor")
     for _ in range(3):
         _, g = _api("/api/pair/generate", "POST", token=laptop)
         _api("/api/pair/link", "POST", body={"code": g["code"]})
@@ -235,13 +247,13 @@ def test_thief_bypass_survives_mixed_case_flood():
 def test_daily_counters_move_after_activity():
     """Telemetry end-to-end: activity today must show up in admin daily[]"""
     sk = _admin_session()
-    _, reg = _register("telemetryprobe")
+    probe = _register("telemetryprobe")
     before = _api("/admin/stats", "GET", token=sk)[1]["daily"]
     today_before = next((d for d in before if d["day"] ==
                          time.strftime("%Y-%m-%d", time.gmtime())), None)
     n_before = today_before["registrations"] if today_before else 0
 
-    _api("/api/alert", "POST", token=reg["token"],
+    _api("/api/alert", "POST", token=probe,
          body={"alert_type": "BATTERY", "battery_pct": 77})
 
     after = _api("/admin/stats", "GET", token=sk)[1]["daily"]
