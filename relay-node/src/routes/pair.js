@@ -3,7 +3,7 @@
 const express = require("express");
 const pool = require("../db");
 const config = require("../config");
-const { sha256, randomToken, now } = require("../util");
+const { sha256, randomToken, now, sixDigitCode } = require("../util");
 const { ensureDailyStats, incrPairings } = require("../stats");
 const { authUser, purgeExpired } = require("../auth");
 
@@ -12,7 +12,7 @@ const router = express.Router();
 // ---- POST /api/pair/generate ----------------------------------------------
 router.post("/api/pair/generate", authUser, async (req, res) => {
   await purgeExpired(pool);
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const code = sixDigitCode();
   await pool.query(
     "INSERT INTO pairing_codes (code, user_id, expires_at) VALUES ($1, $2, $3)",
     [code, req.user.user_id, now() + config.pairTtlSec],

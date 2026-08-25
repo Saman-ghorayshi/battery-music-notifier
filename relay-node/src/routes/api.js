@@ -42,7 +42,9 @@ router.post("/api/ping", authUser, async (req, res) => {
 // ---- POST /api/alert -----------------------------------------------------
 router.post("/api/alert", authUser, async (req, res) => {
   const body = req.body || {};
-  const alertType = String(body.alert_type || "BATTERY").toUpperCase().slice(0, 20);
+  // trim matters: "THIEF_ALERT " with trailing space would otherwise lose
+  // its rate-limit bypass and get stored as a different type
+  const alertType = String(body.alert_type || "BATTERY").trim().toUpperCase().slice(0, 20);
 
   // THIEF_ALERT always bypasses rate limiting -- a thief unplugging the
   // charger must get through even if the device has been polling heavily.

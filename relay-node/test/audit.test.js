@@ -56,3 +56,4 @@ test("admin actions are audited as jsonl", async () => {
 
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+

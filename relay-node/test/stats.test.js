@@ -31,7 +31,11 @@ test("daily stats rollup", async (t) => {
   const { start } = require("../src/server");
   const server = await start();
   const base = `http://127.0.0.1:${server.address().port}`;
-  t.after(() => server.close());
+    t.after(async () => {
+    server.close();
+    await new Promise((r) => setTimeout(r, 50));
+    await require("../src/db").end();
+  });
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -141,3 +145,4 @@ test("daily stats rollup", async (t) => {
 
   // cleanup handled in t.after above
 });
+

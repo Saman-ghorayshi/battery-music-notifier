@@ -30,6 +30,17 @@ function randomToken() {
   return [...arr].map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Crypto-random 6-digit code. Math.random() would be predictable to an
+// attacker watching the minute window; rejection sampling kills modulo bias.
+function sixDigitCode() {
+  const max = 900000;
+  const limit = Math.floor(4294967296 / max) * max;
+  const buf = new Uint32Array(1);
+  let v;
+  do { crypto.getRandomValues(buf); v = buf[0]; } while (v >= limit);
+  return String(100000 + (v % max));
+}
+
 function now() { return Math.floor(Date.now() / 1000); }
 
 // ---- Daily aggregate stats (privacy-first: events, never people) ----
@@ -57,9 +68,9 @@ async function ensureDailyStats(db, force = false) {
     const days = [];
     for (let i = 0; i < STATS_LOOKBACK_DAYS; i++) days.push(dayOffset(today, -i));
 
-    const placeholders = days.map(() => "?").join(",");
+    const placeholders = days.map(() => "(?)").join(",");
     await db.prepare(
-      `INSERT OR IGNORE INTO daily_stats (day) VALUES (${placeholders})`
+      `INSERT OR IGNORE INTO daily_stats (day) VALUES ${placeholders}`
     ).bind(...days).run();
 
     await db.prepare(
@@ -200,7 +211,9 @@ async function handlePing(request, db, user) {
 
 async function handleSendAlert(request, db, user, env) {
   const body = await request.json().catch(() => ({}));
-  const alertType = (body.alert_type || "BATTERY").toUpperCase().slice(0, 20);
+  // trim matters: "THIEF_ALERT " with trailing space would otherwise lose
+  // its rate-limit bypass and get stored as a different type
+  const alertType = (body.alert_type || "BATTERY").trim().toUpperCase().slice(0, 20);
 
   // CRITICAL: Never rate-limit THIEF_ALERT. A thief unplugging the phone
   // must get through immediately, even if the user has been polling heavily.
@@ -499,8 +512,8 @@ function login(){
 // ---- Pairing System ----
 
 async function handlePairGenerate(request, db, user) {
-  // Generate a random 6-digit string
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  // Generate a crypto-random 6-digit string
+  const code = sixDigitCode();
   const expiresAt = now() + 300; // 5 minutes from now
 
   // Store the owning user's id only -- no tokens are ever stored in plaintext

@@ -18,7 +18,11 @@ test("throttles", async (t) => {
   const { start } = require("../src/server");
   const server = await start();
   const base = `http://127.0.0.1:${server.address().port}`;
-  t.after(() => server.close());
+    t.after(async () => {
+    server.close();
+    await new Promise((r) => setTimeout(r, 50));
+    await require("../src/db").end();
+  });
 
   await t.test("register bursts stop at 10/min per ip", async () => {
     let saw429 = false;
@@ -69,3 +73,4 @@ test("throttles", async (t) => {
     assert.equal(r.status, 429);
   });
 });
+

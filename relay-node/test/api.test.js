@@ -40,7 +40,13 @@ test("relay api", async (t) => {
   const { start } = require("../src/server");
   const server = await start();
   const base = `http://127.0.0.1:${server.address().port}`;
-  t.after(() => server.close());
+  t.after(async () => {
+    server.close();
+    await new Promise((r) => setTimeout(r, 50));
+    await require("../src/db").end(); // close shared pool sockets or the process lingers
+    // audio/native addons can leave OS handles node can't see; force the exit
+    setTimeout(() => process.exit(0), 250);
+  });
 
   await t.test("health page looks boring", async () => {
     const r = await request(base).get("/health");
@@ -163,3 +169,4 @@ test("relay api", async (t) => {
     assert.equal(r.body.error, "not_found");
   });
 });
+
