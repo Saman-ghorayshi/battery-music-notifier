@@ -5,6 +5,16 @@ import tempfile
 import os
 from unittest.mock import MagicMock, patch, mock_open
 from battery_notifier.config import Config
+
+# Proxy env vars leak in from real shells (esp. Linux boxes behind v2rayN).
+# Tests here decide tiers explicitly; the env-var tier itself lives in
+# tests/test_proxy_env.py. Autouse so no test is order-dependent.
+@pytest.fixture(autouse=True)
+def _clean_proxy_env(monkeypatch):
+    for _name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                  "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(_name, raising=False)
+
 from battery_notifier.remote import (
     RemoteMonitor,
     NotificationServer,
