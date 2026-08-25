@@ -456,7 +456,9 @@ function dashboardHTML(data) {
   }).join("");
 
   return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Battery Relay Admin</title>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Battery Relay Admin</title>
 <style>
   body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; margin: 20px; }
   h1 { color: #00d4ff; } h2 { color: #ff9f43; margin-top: 30px; }

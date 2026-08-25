@@ -217,19 +217,25 @@ def main(argv=None) -> int:
         worker_url = DEFAULT_WORKER_URL
         worker_token = ""
         admin_key = ""
+
+        def ask_admin_key(prompt):
+            """Admin keys must be >=16 chars (brute-force resistance).
+            Empty means 'skip'."""
+            while True:
+                k = input(prompt).strip()
+                if not k or len(k) >= 16:
+                    return k
+                print("  Admin key must be at least 16 characters (or empty to skip).")
+
         w_ans = input("Use default hosted worker? (Y/n): ").strip().lower()
         if w_ans in ("n", "no"):
             worker_url = input("  Enter your self-hosted worker URL: ").strip()
             wt_ans = input("  Do you already have a token? (y/N): ").strip().lower()
             if wt_ans in ("y", "yes"):
                 worker_token = input("  Enter your worker token: ").strip()
-            ak_ans = input("  Enter admin key (or press Enter to skip): ").strip()
-            if ak_ans:
-                admin_key = ak_ans
+            admin_key = ask_admin_key("  Enter admin key (min 16 chars, Enter to skip): ")
         else:
-            ak_ans = input("  Enter admin key (optional, for admin commands): ").strip()
-            if ak_ans:
-                admin_key = ak_ans
+            admin_key = ask_admin_key("  Enter admin key (optional, min 16 chars, Enter to skip): ")
 
         print("\n [Telegram Notification Setup]")
         print("  Get token from @BotFather, chat ID from @userinfobot")

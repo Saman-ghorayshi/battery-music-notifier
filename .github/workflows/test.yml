@@ -27,3 +27,24 @@ jobs:
       # the explicit -m here guarantees it even if addopts change.
       - name: Run unit tests
         run: pytest -m "not live" -v
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    continue-on-error: true # warn-first; promote to blocking after triage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit (python deps)
+        run: |
+          pip install -q pip-audit
+          pip-audit -r requirements.txt --desc off || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: npm audit (relay-node runtime deps)
+        working-directory: relay-node
+        run: |
+          npm install --omit=dev --no-audit --no-fund >/dev/null 2>&1 || true
+          npm audit --omit=dev || true
