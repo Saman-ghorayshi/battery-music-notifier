@@ -9,6 +9,7 @@ const { sha256, randomToken, now, clientIp } = require("../util");
 const { checkRateLimit, resetBucket } = require("../rateLimit");
 const { adminAuth, purgeExpired } = require("../auth");
 const audit = require("../audit");
+const { ensureDailyStats } = require("../stats");
 
 const router = express.Router();
 
@@ -51,6 +52,7 @@ router.use("/admin", adminAuth);
 
 // ---- GET /admin/stats --------------------------------------------------------
 router.get("/admin/stats", async (_req, res) => {
+  await ensureDailyStats(true).catch(() => {});
   const t = now();
   const q = async (sql, params = []) => (await pool.query(sql, params)).rows[0].cnt;
   const [total, active5, alerts, banned, pro, founding] = await Promise.all([
@@ -70,6 +72,9 @@ router.get("/admin/stats", async (_req, res) => {
             is_pro, is_founding
      FROM users ORDER BY last_seen DESC LIMIT 50`,
   );
+  const daily = await pool.query(
+    "SELECT * FROM daily_stats ORDER BY day DESC LIMIT 30",
+  );
 
   res.json({
     ok: true,
@@ -83,6 +88,7 @@ router.get("/admin/stats", async (_req, res) => {
       total_alerts_sent: totalAlerts || 0,
     },
     recent_users: recent.rows,
+    daily: daily.rows,
   });
 });
 

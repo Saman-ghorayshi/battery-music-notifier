@@ -12,6 +12,7 @@ low or someone steals your phone, and nothing more.
 | device name + platform string | users table | shown to you in the admin dashboard |
 | battery %, charging flag, alert type/timestamps | users table | the whole point of the app |
 | last 200 alert events per user | events table | debugging history |
+| aggregate daily counters (registrations, alerts, active devices) | daily_stats table | operator dashboard trends. Counts of events only -- there is no way to tie a row back to a person, and old days freeze permanently |
 
 No emails, no phone numbers, no accounts, no location, no analytics.
 Pairing codes hold a user id and expire after 5 minutes.

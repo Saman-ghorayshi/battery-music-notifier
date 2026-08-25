@@ -4,6 +4,7 @@ const express = require("express");
 const pool = require("../db");
 const config = require("../config");
 const { sha256, randomToken, now } = require("../util");
+const { ensureDailyStats, incrPairings } = require("../stats");
 const { authUser, purgeExpired } = require("../auth");
 
 const router = express.Router();
@@ -42,11 +43,14 @@ router.post("/api/pair/link", async (req, res) => {
 
   // Fresh linked token for the joining device; hash stored, plaintext
   // returned exactly once. Re-linking de-authorizes the previous phone.
+  // Rare event -> inline increment is free; the code row is already deleted
+  // so there is nothing to count retroactively.
   const linkedToken = randomToken();
   await pool.query(
     "UPDATE users SET linked_token = $1, last_seen = $2 WHERE user_id = $3",
     [sha256(linkedToken), now(), record.user_id],
   );
+  incrPairings().catch(() => {});
 
   res.json({ ok: true, token: linkedToken });
 });

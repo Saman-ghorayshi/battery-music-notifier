@@ -6,6 +6,7 @@ const pool = require("../db");
 const config = require("../config");
 const { sha256, randomToken, now, clientIp } = require("../util");
 const { checkRateLimit } = require("../rateLimit");
+const { ensureDailyStats } = require("../stats");
 const { authUser, purgeExpired } = require("../auth");
 
 const router = express.Router();
@@ -15,6 +16,7 @@ router.post("/api/register", async (req, res) => {
   if (config.rateLimitEnabled && !(await checkRateLimit("reg:" + clientIp(req), config.registerRateMax))) {
     return res.status(429).json({ ok: false, error: "rate_limited" });
   }
+  ensureDailyStats().catch(() => {});
   const body = req.body || {};
   const deviceName = String(body.device_name || "").slice(0, 100);
   const platform = String(body.platform || "").slice(0, 50);
@@ -49,6 +51,7 @@ router.post("/api/alert", authUser, async (req, res) => {
     return res.status(429).json({ ok: false, error: "rate_limited" });
   }
   purgeExpired(pool);
+  ensureDailyStats().catch(() => {});
 
   const batteryPct = typeof body.battery_pct === "number" ? body.battery_pct : -1;
   const isCharging = body.is_charging ? 1 : 0;

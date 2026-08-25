@@ -32,6 +32,55 @@ function randomToken() {
 
 function now() { return Math.floor(Date.now() / 1000); }
 
+// ---- Daily aggregate stats (privacy-first: events, never people) ----
+
+const STATS_LOOKBACK_DAYS = 7;
+let statsRolledDay = "";
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dayOffset(iso, delta) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+// Recompute counters for young days from their source tables. A day's row is
+// finalized (computed=1) the first time it is no longer "today" -- after that
+// event trimming cannot rewrite history. Today stays open all day.
+async function ensureDailyStats(db, force = false) {
+  const today = todayStr();
+  if (!force && statsRolledDay === today) return;
+  try {
+    const days = [];
+    for (let i = 0; i < STATS_LOOKBACK_DAYS; i++) days.push(dayOffset(today, -i));
+
+    const placeholders = days.map(() => "?").join(",");
+    await db.prepare(
+      `INSERT OR IGNORE INTO daily_stats (day) VALUES (${placeholders})`
+    ).bind(...days).run();
+
+    await db.prepare(
+      `UPDATE daily_stats SET
+         registrations  = (SELECT COUNT(*) FROM users WHERE date(created_at, 'unixepoch') = daily_stats.day),
+         alerts         = (SELECT COUNT(*) FROM events WHERE date(ts, 'unixepoch') = daily_stats.day),
+         thief_alerts   = (SELECT COUNT(*) FROM events WHERE date(ts, 'unixepoch') = daily_stats.day AND event_type = 'THIEF_ALERT'),
+         active_devices = CASE WHEN daily_stats.day = ? THEN
+                            (SELECT COUNT(*) FROM users WHERE last_seen > ?)
+                          ELSE active_devices END,
+         computed       = CASE WHEN daily_stats.day = ? THEN 0 ELSE 1 END
+       WHERE day IN (${placeholders}) AND computed = 0`
+    ).bind(today, now() - 86400, today, ...days).run();
+
+    statsRolledDay = today;
+  } catch (e) {
+    // Stats must never break the request path.
+    console.error("daily_stats rollup failed:", e.message);
+  }
+}
+
 // ---- Rate limiting (in-memory, per-worker-instance) ----
 
 const rateBuckets = new Map();
@@ -128,6 +177,7 @@ async function handleRegister(request, db, env) {
   if (isRateLimitEnabled(env) && !checkRateLimit("reg:" + clientIp(request), REGISTER_RATE_MAX)) {
     return json({ ok: false, error: "rate_limited" }, 429);
   }
+  ensureDailyStats(db);
   const body = await request.json().catch(() => ({}));
   const deviceName = (body.device_name || "").slice(0, 100);
   const platform = (body.platform || "").slice(0, 50);
@@ -161,6 +211,7 @@ async function handleSendAlert(request, db, user, env) {
   }
   cleanRateBuckets();
   await cleanExpiredSessions(db);
+  ensureDailyStats(db);
   const batteryPct = typeof body.battery_pct === "number" ? body.battery_pct : -1;
   const isCharging = body.is_charging ? 1 : 0;
   const t = now();
@@ -243,6 +294,7 @@ async function handleAdminLogin(request, db, env) {
 }
 
 async function handleAdminStats(db) {
+  await ensureDailyStats(db, true);
   const total = await db.prepare("SELECT COUNT(*) as cnt FROM users").first();
   const active = await db.prepare("SELECT COUNT(*) as cnt FROM users WHERE last_seen > ?").bind(now() - 300).first();
   const alerts = await db.prepare("SELECT COUNT(*) as cnt FROM users WHERE alert_active = 1").first();
@@ -251,6 +303,7 @@ async function handleAdminStats(db) {
   const founding = await db.prepare("SELECT COUNT(*) as cnt FROM users WHERE is_founding = 1").first();
   const totalAlerts = await db.prepare("SELECT SUM(total_alerts) as cnt FROM users").first();
   const recentUsers = await db.prepare("SELECT user_id, device_name, platform, last_seen, is_banned, alert_active, alert_type, alert_ts, battery_pct, is_charging, total_alerts, is_pro, is_founding FROM users ORDER BY last_seen DESC LIMIT 50").all();
+  const daily = await db.prepare("SELECT * FROM daily_stats ORDER BY day DESC LIMIT 30").all();
   return json({
     ok: true,
     stats: {
@@ -263,6 +316,7 @@ async function handleAdminStats(db) {
       total_alerts_sent: totalAlerts.cnt || 0,
     },
     recent_users: recentUsers.results || [],
+    daily: daily.results || [],
   });
 }
 
@@ -307,6 +361,27 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Tiny inline SVG sparkline of alerts/day -- no dependencies.
+function dailySparkline(daily) {
+  const rows = (daily || []).slice().reverse(); // oldest -> newest
+  if (!rows.length) return "";
+  const max = Math.max(1, ...rows.map(r => r.alerts || 0));
+  const w = 280, h = 56;
+  const pts = rows.map((r, i) => {
+    const x = (i / Math.max(1, rows.length - 1)) * (w - 4) + 2;
+    const y = h - 4 - ((r.alerts || 0) / max) * (h - 10);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const todayRow = rows[rows.length - 1];
+  return `<div class="stat-card" style="grid-column: 1 / -1;">
+    <div class="label">Alerts per day (aggregate only)</div>
+    <svg width="${w}" height="${h}" style="display:block;margin-top:6px">
+      <polyline fill="none" stroke="#00d4ff" stroke-width="2" points="${pts}"/>
+    </svg>
+    <div class="label">${todayRow.day}: ${todayRow.alerts ?? "-"} alerts · ${todayRow.registrations ?? "-"} new devices · ${todayRow.active_devices ?? "-"} active · ${todayRow.pairings ?? 0} pairings</div>
+  </div>`;
 }
 
 function dashboardHTML(data) {
@@ -358,6 +433,7 @@ function dashboardHTML(data) {
   <div class="stat-card"><div class="label">Pro Users</div><div class="value">${s.pro}</div></div>
   <div class="stat-card"><div class="label">Founding</div><div class="value">${s.founding}</div></div>
   <div class="stat-card"><div class="label">Banned</div><div class="value">${s.banned}</div></div>
+  ${dailySparkline(data.daily)}
 </div>
 <div class="actions">
   <button onclick="fetch('/admin/broadcast',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('sk')},body:JSON.stringify({alert_type:'TEST'})}).then(()=>location.reload())">Broadcast Test Alert</button>
@@ -454,6 +530,12 @@ async function handlePairLink(request, db) {
   await db.prepare("UPDATE users SET linked_token = ?, last_seen = ? WHERE user_id = ?")
     .bind(await sha256(linkedToken), now(), record.user_id).run();
 
+  // Rare event -> inline increment is free; the code row is already deleted
+  // so there is nothing to count retroactively.
+  await db.prepare(
+    "INSERT INTO daily_stats (day, pairings) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET pairings = pairings + 1"
+  ).bind(todayStr()).run();
+
   return json({ ok: true, token: linkedToken });
 }
 // ---- Main router ----
@@ -531,6 +613,8 @@ export default {
 battery percentage, charging state, alert timestamps, and the last 200 alert events.</p>
 <p>No accounts, no emails, no phone numbers, no location, no analytics.
 Tokens are stored only as SHA-256 hashes. Pairing codes expire after 5 minutes.</p>
+<p>The only usage data is aggregate daily counts (how many devices registered,
+how many alerts fired) -- individual requests are never tracked or stored by IP.</p>
 <p>This server never sends notifications on its own -- your devices deliver their own alerts.</p>
 <p><a href="https://github.com/Saman-ghorayshi/battery-music-notifier/blob/main/SECURITY.md">Full security model</a></p>
 </body></html>`);

@@ -282,6 +282,23 @@ def test_thief_alert_bypasses_rate_limit():
     assert b.get("ok") is True
 
 
+def test_admin_stats_has_daily_array():
+    """admin stats includes the aggregate daily counters (needs ADMIN_KEY)."""
+    admin_key = os.environ.get("ADMIN_KEY", "")
+    if not admin_key:
+        pytest.skip("ADMIN_KEY not set -- cannot verify admin surfaces")
+    s, b = _api("/admin/login", "POST", body={"admin_key": admin_key})
+    assert s == 200, b
+    s, b = _api("/admin/stats", "GET", token=b["session_key"])
+    assert s == 200
+    daily = b.get("daily")
+    assert isinstance(daily, list) and len(daily) >= 1
+    row = daily[0]
+    for field in ("day", "registrations", "alerts", "thief_alerts",
+                  "pairings", "active_devices"):
+        assert field in row, f"daily row missing '{field}'"
+
+
 def test_404_on_unknown_path():
     """unknown path returns 404."""
     s, b = _api("/api/nonexistent")
@@ -305,6 +322,7 @@ if __name__ == "__main__":
         test_non_numeric_pairing_code_rejected,
         test_rate_limiting,
         test_thief_alert_bypasses_rate_limit,
+        test_admin_stats_has_daily_array,
         test_404_on_unknown_path,
     ]
     passed = failed = 0

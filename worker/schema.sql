@@ -46,6 +46,19 @@ CREATE TABLE IF NOT EXISTS events (
   ts INTEGER DEFAULT 0
 );
 
+-- Aggregate usage counters. Events about events -- never about people.
+-- No IPs, no identifiers, no sessions. A day's row is computed while young
+-- and then frozen (computed=1), so event trimming can never rewrite history.
+CREATE TABLE IF NOT EXISTS daily_stats (
+  day TEXT PRIMARY KEY,
+  registrations INTEGER DEFAULT -1,
+  alerts INTEGER DEFAULT -1,
+  thief_alerts INTEGER DEFAULT -1,
+  pairings INTEGER DEFAULT 0,
+  active_devices INTEGER DEFAULT -1,
+  computed INTEGER DEFAULT 0
+);
+
 -- Indexes for fast lookups
 CREATE INDEX IF NOT EXISTS idx_users_token ON users(token);
 CREATE INDEX IF NOT EXISTS idx_users_linked_token ON users(linked_token);
