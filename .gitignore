@@ -16,3 +16,4 @@ last_server.json
 .env
 
 relay-node/logs/
+build_version.txt
