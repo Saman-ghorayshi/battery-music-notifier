@@ -262,6 +262,21 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
       -Protocol TCP -LocalPort 8802-8805,18080 -RemoteAddress 172.16.0.0/12 -Action Allow
   (18080 = tools/tcp_forward.py bridging WSL→v2rayN socks for relay flows.)
   After that: rerun R1/R2/S1/S2 per session-log recipe.
+- 2026-08-25 (session 7): MACHINE INCIDENT → PRODUCT HARDENING. The box's WMI
+  service wedged system-wide mid-session (post Hyper-V/WSL churn): every
+  platform.system()/PowerShell call froze indefinitely — that's what all the
+  "hangs" were. Product now survives it: battery_notifier/sysprobe.py (timeout
+  system probe + wmi_wedged flag), proc_safe.py (tree-kill subprocess runner),
+  connection.py circuit breaker, win10toast import gated on wedge flag,
+  adb/player/battery external calls bounded. pytest gains a hard 120s/test
+  ceiling in pyproject. Suite under active wedge: 117 passed in 2:26 (was ∞).
+  Cross-OS campaign completed pre-incident: relay thief sync Linux↔Win both
+  directions PASS (4.04s / 3.62s vs 5s bar) through real CF + v2rayN chain;
+  raw ACK socket both directions via mirrored localhost; adversarial+standard
+  suites green on staging AND prod (32/32). Debian test env provisioned fully
+  offline via wheelhouse (WSL NAT can't reach pypi; Windows wheelhouse +
+  manylinux psutil wheel copied over). Reboot recommended to heal the machine;
+  product no longer cares either way.
 - `[x]` **Redis rate limiting**: REDIS_URL optional; set → fixed-window counters
   via INCR/EXPIRE, unset → in-memory Map (same signatures, routes unchanged).
   Fail-open by design: a dead cache must never block a THIEF_ALERT.
