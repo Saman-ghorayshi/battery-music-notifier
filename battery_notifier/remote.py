@@ -61,12 +61,12 @@ class RemoteMonitor:
                 config.proxy_url = self.effective_proxy
                 log.info("Auto-applied detected proxy: %s", self.effective_proxy)
 
+        from .battery import Battery
+        self.battery = Battery()
+
     def stop(self) -> None:
         """Signal the monitor loops to exit. Thread-safe; used by the GUI."""
         self._stop_event.set()
-
-        from .battery import Battery
-        self.battery = Battery()
 
     def _resolve_host(self, verbose: bool = True) -> str | None:
         """Figure out where the server is using all available methods."""
