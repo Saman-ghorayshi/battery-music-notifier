@@ -251,6 +251,17 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
   values, pair-code boundaries, CORS preflight, telemetry counters move.
   Hardening shipped from its findings: crypto-random pairing codes
   (Math.random was predictable), alert_type trimmed before normalization.
+- `[x]` **Cross-OS rigs built** (tests/cross_os_relay_thief.py, tests/cross_os_socket.py,
+  tools/tcp_forward.py): relay roles measure alert latency against the 5s bar via a
+  shared-clock marker file; socket roles exercise the raw ACK protocol.
+  ENVIRONMENT WALL hit: WSL Debian cannot reach Windows host ports NOR CF directly
+  (mirrored networking fails at startup — ConfigureNetworking/0x8007054f, likely
+  fighting the localhost system proxy; NAT fallback + Hyper-V firewall default-block).
+  Both directions time out. UNBLOCK = one admin PowerShell:
+    New-NetFirewallRule -DisplayName "battery-crossos" -Direction Inbound `
+      -Protocol TCP -LocalPort 8802-8805,18080 -RemoteAddress 172.16.0.0/12 -Action Allow
+  (18080 = tools/tcp_forward.py bridging WSL→v2rayN socks for relay flows.)
+  After that: rerun R1/R2/S1/S2 per session-log recipe.
 - `[x]` **Redis rate limiting**: REDIS_URL optional; set → fixed-window counters
   via INCR/EXPIRE, unset → in-memory Map (same signatures, routes unchanged).
   Fail-open by design: a dead cache must never block a THIEF_ALERT.
