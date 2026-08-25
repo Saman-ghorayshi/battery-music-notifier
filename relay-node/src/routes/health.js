@@ -14,6 +14,8 @@ const privacyPage = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bat
 battery percentage, charging state, alert timestamps, and the last 200 alert events.</p>
 <p>No accounts, no emails, no phone numbers, no location, no analytics.
 Tokens are stored only as SHA-256 hashes. Pairing codes expire after 5 minutes.</p>
+<p>The only usage data is aggregate daily counts (how many devices registered,
+how many alerts fired) -- individual requests are never tracked or stored by IP.</p>
 <p>This server never sends notifications on its own -- your devices deliver their own alerts.</p>
 <p><a href="https://github.com/Saman-ghorayshi/battery-music-notifier/blob/main/SECURITY.md">Full security model</a></p>
 </body></html>`;
