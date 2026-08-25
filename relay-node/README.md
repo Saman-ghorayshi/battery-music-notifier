@@ -9,15 +9,22 @@ answering "n" to the hosted worker question during `battery-music init`).
 Nothing else changes - register, alerts, polling, thief catcher, pairing
 and the admin CLI all work exactly the same.
 
+> **Note:** this is a *self-hosting* component. People who just want to run
+> the app never touch Docker or Node -- `pip install` and go.
+
 ## Quick start
 
-    cp .env.example .env       # set ADMIN_KEY to something long + random
-    docker compose up -d db    # or use your own postgres
-    npm install
-    npm run migrate            # creates tables
-    npm start                  # listens on :8787
+### Plain (no Docker needed)
 
-Or all-in-one with Docker:
+Any Postgres you already have works - local install, your VPS, Railway,
+whatever:
+
+    cp .env.example .env      # point DATABASE_URL at your postgres
+    npm install
+    npm run migrate
+    npm start                 # listens on :8787
+
+Docker is optional sugar for people who like containers:
 
     docker compose up -d --build
 

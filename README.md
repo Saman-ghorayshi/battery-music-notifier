@@ -2,6 +2,43 @@
 
 A cross-platform battery monitor and thief catcher. Works on your phone (Termux) and laptop (Windows/macOS/Linux). Three ways to connect: Cloudflare Worker relay (default, zero config), local socket (USB/Wi-Fi), or Telegram cloud fallback.
 
+## Platforms
+
+| Platform | Status | How |
+|---|---|---|
+| **Windows** | full app + GUI + exe | `pip install -e ".[gui,audio]"` or download `battery-music-gui.exe` from Releases |
+| **macOS / Linux** | full CLI + GUI* | `pipx install`; GUI needs pywebview's GTK/Qt/Cocoa deps |
+| **Android (Termux)** | phone-side client + thief catcher | one-liner: `curl -sSL <raw>/termux/termux_setup.sh \| bash` |
+| **Android (native)** | planned v2.1 | Kotlin companion app (Phase 3 in plan.md) |
+| **iPhone** | not supported as an app | iOS kills background apps, so thief catching is impossible without a native build. Partial workaround today: Apple **Shortcuts → Automation** on "Battery Level" can call your relay's `/api/alert` URL. Real support = Swift app, post-v2.1 idea. |
+
+\* mac/Linux GUI bundles are a deliberate v2.0 scope cut; CLI covers everything.
+
+## Behind censorship / VPN (Iran and friends)
+
+The relay path is plain HTTPS to Cloudflare, so it works through any proxy or
+VPN with zero config. The app is smart about the messy reality:
+
+- **Auto-detects local proxies** on the common ports and verifies the protocol
+  by handshake: v2rayN socks `10808`, v2rayN http `10809`, Clash `7890`,
+  Hiddify `12334`, Nekoray `2080`, plus `1080`/`1081`.
+- **Respects standard env vars**: if you already export `HTTPS_PROXY`
+  (or HTTP_PROXY / ALL_PROXY), that is picked up automatically.
+  Priority: explicit config > env vars > auto-detect > direct.
+- **Escape hatch**: set `proxy_url = "direct"` in config.toml (or pick *Direct*
+  in the GUI) when auto-detection guesses wrong -- nothing will ever be
+  proxied again, not even port scanning.
+- `battery-music doctor` prints a per-tier verdict under your current network.
+
+Deploying/maintaining things *from inside* a censored network:
+
+| Task | Recipe |
+|---|---|
+| `npx wrangler ...` | undici ignores socks; use the **http** listener: `set HTTPS_PROXY=http://127.0.0.1:10809` first |
+| `pip install` behind socks | pip speaks http proxies natively: `pip install --proxy http://127.0.0.1:10809 ...` |
+| dash.cloudflare.com blocked | same browser through the proxy profile; workers.dev API endpoints usually pass once HTTPS_PROXY is set for wrangler |
+| workers.dev domain itself DNS-blocked for users | route the worker through your own domain (worker/README.md "Obscurity") |
+
 ## What It Does
 
 1. **Battery Notifier** -- Phone monitors battery. When it hits your threshold (low or full), the laptop plays a sound.

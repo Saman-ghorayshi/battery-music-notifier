@@ -13,6 +13,8 @@ import threading
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
+
+from .config import sanitize_proxy_url
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -315,21 +317,40 @@ def _detect_local_proxy() -> Optional[str]:
     return None
 
 
+def _proxy_from_env() -> Optional[str]:
+    """
+    Standard environment proxies (HTTP_PROXY / HTTPS_PROXY / ALL_PROXY),
+    normalized through sanitize_proxy_url. Many proxy clients and corporate
+    setups export these; respecting them means zero-config for those users.
+    """
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                 "ALL_PROXY", "all_proxy"):
+        val = os.environ.get(name)
+        if val and val.strip():
+            try:
+                return sanitize_proxy_url(val.strip())
+            except Exception:
+                return val.strip()
+    return None
+
+
 def get_effective_proxy(config) -> Optional[str]:
     """
     Determine which proxy to actually use at runtime.
-    Priority: config.proxy_url > auto-detected proxy > None.
-
-    If config has a proxy explicitly set, use that.
-    Otherwise, auto-detect and use the first available local proxy.
+    Priority: config.proxy_url > env vars (HTTPS_PROXY etc.) >
+              auto-detected local proxy > None.
 
     Opt-out (C5 fix): proxy_url == "direct"/"off"/"none" forces a direct
-    connection and skips both detection and the local port scan entirely.
+    connection and skips env vars, detection, and the local port scan.
     """
     if config and config.proxy_url:
         if config.proxy_url.lower() in ("direct", "off", "none"):
             return None
         return config.proxy_url
+    env_proxy = _proxy_from_env()
+    if env_proxy:
+        log.debug("Using proxy from environment variable")
+        return env_proxy
     env = detect_environment()
     return env.auto_proxy
 
