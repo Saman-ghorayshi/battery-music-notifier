@@ -7,6 +7,10 @@ const RATE_LIMIT_WINDOW = 60; // seconds
 const RATE_LIMIT_MAX = 30; // requests per minute per user
 const REGISTER_RATE_MAX = 10; // registrations per minute per IP
 const ADMIN_LOGIN_MAX = 5; // failed admin logins per minute per IP
+const PAIR_LINK_MAX = 10; // pair-link attempts per minute per IP (6-digit brute shield)
+const THIEF_IP_MAX = 120; // thief alerts per minute per IP (generous; still bounded)
+const AUTH_FAIL_LIMIT = 50; // failed bearer lookups per hour per token-hash -> deny
+const MAX_BODY_BYTES = 16384; // reject oversized bodies before parsing
 const ADMIN_SESSION_TTL = 3600; // 1 hour
 const MAX_EVENTS_PER_USER = 200; // keep event log bounded
 
@@ -121,6 +125,27 @@ function cleanRateBuckets() {
   }
 }
 
+// ---- Rogue-token containment --------------------------------------------
+// Tokens that rack up >= AUTH_FAIL_LIMIT failed lookups in an hour get
+// answered from an in-memory deny-set: instant 403, zero DB hits.
+
+const authFails = new Map();   // tokenHash -> { count, windowStart }
+const deniedTokens = new Set();
+
+function noteAuthFail(tokenHash) {
+  const t = now();
+  let f = authFails.get(tokenHash);
+  if (!f || t - f.windowStart > 3600) {
+    f = { count: 0, windowStart: t };
+    authFails.set(tokenHash, f);
+  }
+  f.count++;
+  if (f.count >= AUTH_FAIL_LIMIT) {
+    deniedTokens.add(tokenHash);
+    console.warn("rogue token contained:", tokenHash.slice(0, 12));
+  }
+}
+
 // Clean expired admin sessions from D1 (called periodically on alert)
 async function cleanExpiredSessions(db) {
   try {
@@ -137,10 +162,10 @@ function json(data, status = 200) {
     status,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Frame-Options": "DENY",
     },
   });
 }
@@ -148,7 +173,13 @@ function json(data, status = 200) {
 function html(content, status = 200) {
   return new Response(content, {
     status,
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Frame-Options": "DENY",
+    },
   });
 }
 
@@ -161,10 +192,14 @@ async function authUser(request, db) {
   if (!rawToken || rawToken.length < 16) return null;
   // Tokens are stored only as sha256 hashes (users.token, users.linked_token).
   const tokenHash = await sha256(rawToken);
+  if (deniedTokens.has(tokenHash)) return "denied";
   // Don't filter is_banned in SQL — return "banned" so the client gets a clear error
   const user = await db.prepare("SELECT * FROM users WHERE token = ? OR linked_token = ?")
     .bind(tokenHash, tokenHash).first();
-  if (!user) return null;
+  if (!user) {
+    noteAuthFail(tokenHash);
+    return null;
+  }
   if (user.is_banned) return "banned";
   return user;
 }
@@ -215,11 +250,15 @@ async function handleSendAlert(request, db, user, env) {
   // its rate-limit bypass and get stored as a different type
   const alertType = (body.alert_type || "BATTERY").trim().toUpperCase().slice(0, 20);
 
-  // CRITICAL: Never rate-limit THIEF_ALERT. A thief unplugging the phone
-  // must get through immediately, even if the user has been polling heavily.
-  // Rate limiting is for registration/polling abuse, not safety alerts.
+  // CRITICAL: Never rate-limit THIEF_ALERT by *user*. A thief unplugging the
+  // phone must get through immediately. It still consumes a generous per-IP
+  // bucket (120/min) so a rogue token can't burn unlimited CPU/D1.
   const isCriticalAlert = alertType === "THIEF_ALERT";
-  if (!isCriticalAlert && isRateLimitEnabled(env) && !checkRateLimit(user.user_id)) {
+  if (isCriticalAlert) {
+    if (!checkRateLimit("thiefip:" + clientIp(request), THIEF_IP_MAX)) {
+      return json({ ok: false, error: "rate_limited" }, 429);
+    }
+  } else if (isRateLimitEnabled(env) && !checkRateLimit(user.user_id)) {
     return json({ ok: false, error: "rate_limited" }, 429);
   }
   cleanRateBuckets();
@@ -524,6 +563,11 @@ async function handlePairGenerate(request, db, user) {
 }
 
 async function handlePairLink(request, db) {
+  // Brute-force shield: 6 digits = 900k space; without this cap an attacker
+  // hammering during a live 5-min window has a real hit probability.
+  if (!checkRateLimit("pair:" + clientIp(request), PAIR_LINK_MAX)) {
+    return json({ ok: false, error: "rate_limited" }, 429);
+  }
   const body = await request.json().catch(() => ({}));
   const code = body.code;
   if (!code || code.length !== 6 || !/^\d{6}$/.test(code)) return json({ ok: false, error: "invalid_code" }, 400);
@@ -559,18 +603,31 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // CORS preflight
+    // Incident kill switch: /api/* closes; health + admin stay reachable.
+    if (env.MAINTENANCE_MODE === "1" && path.startsWith("/api/")) {
+      return json({ ok: false, error: "maintenance" }, 503);
+    }
+
+    // Body-size gate: reject oversized payloads before reading/parsing.
+    const contentLength = parseInt(request.headers.get("Content-Length") || "0", 10);
+    if (contentLength > MAX_BODY_BYTES) {
+      return json({ ok: false, error: "payload_too_large" }, 413);
+    }
+
+    // Native clients and the same-origin dashboard don't need CORS, so we
+    // don't send it: this kills drive-by browser abuse of the public API.
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" } });
+      return new Response(null, { status: 204 });
     }
 
     // ---- Public API ----
     if (path === "/api/register" && request.method === "POST") return handleRegister(request, db, env);
-    
+
     // 6-Digit Pairing System
     if (path === "/api/pair/generate" && request.method === "POST") {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handlePairGenerate(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/pair/link" && request.method === "POST") {
@@ -580,21 +637,25 @@ export default {
     if (path === "/api/ping" && request.method === "POST") {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handlePing(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/alert" && request.method === "POST") {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handleSendAlert(request, db, u, env) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/clear" && request.method === "POST") {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handleClearAlert(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/poll" && request.method === "GET") {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handlePoll(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     // ---- Admin API ----

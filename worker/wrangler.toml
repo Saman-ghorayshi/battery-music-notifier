@@ -11,3 +11,5 @@ database_id = "633974ee-2bcd-41f6-aaa3-59660c003815"
 
 [vars]
 RATE_LIMIT_ENABLED = "true"
+
+MAINTENANCE_MODE = "0"

@@ -14,3 +14,5 @@ database_id = "c1ccfa5c-f6f2-4baf-8ecb-568df4d7ff35"
 [vars]
 RATE_LIMIT_ENABLED = "true"
 ENVIRONMENT = "staging"
+
+MAINTENANCE_MODE = "0"
