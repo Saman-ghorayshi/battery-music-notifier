@@ -55,3 +55,7 @@ markers = [
     "live: integration tests hitting the real worker/D1/Telegram (deselected by default; run with -m live)",
 ]
 addopts = "-m 'not live'"
+# Every test gets a hard ceiling: a wedged WMI/network stack can freeze
+# individual tests forever, and that must never freeze the whole suite run.
+timeout = 120
+timeout_method = "thread"
