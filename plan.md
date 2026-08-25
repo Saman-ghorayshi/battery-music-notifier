@@ -2,7 +2,18 @@
 
 > Working plan for taking the project from "works for me" to public release.
 > Status markers: `[ ]` todo · `[x]` done · `[*]` in progress
-> Last updated: 2026-08-24
+> Last updated: 2026-08-25
+
+## 🚦 RELEASE READINESS (2026-08-25)
+
+**Code-side: COMPLETE and verified.** Unit 117 ✓ · relay 16+1 ✓ · live 15 +
+adversarial 17 vs staging AND prod ✓ · cross-OS thief sync Linux↔Win <5s ✓ ·
+exe builds+boots ✓ · telemetry/Redis/audit live ✓.
+
+**To ship v2.0.0 the owner must:** ① rotate the leaked `ghp_` PAT + `cfut_`
+CF token ② `git push` (43 commits local) ③ `git tag v2.0.0 && git push --tags`
+→ CI builds exe draft → publish ④ physical QA checklist (Phase 5 below).
+Everything else in this file is polish or post-launch.
 
 ---
 
@@ -147,35 +158,85 @@ Packaging:
   scripts/build_gui_exe.ps1; release.yml builds it on tag. BUILD VERIFIED locally:
   dist/battery-music-gui.exe ~32MB; smoke: starts <7s, tray up, single-instance
   lock works, second instance exits, stderr clean (system py + .venv).
-- `[ ]` exe icon + version resource (cosmetic backlog)
+- `[ ]` exe icon + version resource → **spec'd in SESSION A below, Part 1**
 - `[ ]` Verify on clean Win11 VM (Phase 5)
 - Acceptance: cold start <3s ✓ (local smoke); settings round-trip lossless ✓
   (tests/test_gui_headless.py, 9 tests); arm→unplug→alarm <5s — needs physical
   test (Phase 5)
 
-## Phase 3 — Kotlin Companion App (v2.1, post-launch)  `[ ]`
+## Phase 3 — Kotlin Companion App (v2.1)  `[* spec'd, not started]`
 
-Repo layout `/android`. Compose UI, minSdk 26, ~500 LOC goal. Zero backend changes.
+**Locked decisions (owner-confirmed 2026-08-25):**
+package id `com.saman.batterymusic` · v2.1-alpha APK is **debug-signed**
+(sideload-friendly; proper keystore secret can replace later) · target
+Android 10+ (API 29), **minSdk 26** (power-disconnect manifest receiver is
+implicit-broadcast-exempt from API 26) · distributed as GitHub APK only.
 
-- `[ ]` **Thief catcher**: manifest receiver on `ACTION_POWER_DISCONNECTED`
-  (implicit-broadcast exempt since API 26 — Android wakes app even if closed)
-  → expedited WorkManager job POSTs `THIEF_ALERT` w/ stored token.
-  Foreground service only while armed-charging (listens BATTERY_CHANGED).
-- `[ ]` **Battery watcher**: WorkManager periodic (~15 min floor) posts
-  `/api/alert` when threshold crossed, `/api/clear` on normalize.
-- `[ ]` **Onboarding**: enter 6-digit pair code → `/api/pair/link` → token into
-  EncryptedSharedPreferences; default worker URL baked; "Send TEST alert" button.
-- `[ ]` **Local siren option**: MediaPlayer loop on unplug (mode=local equivalent).
-- `[ ]` **Build-from-Iran kit** (docs/android/BUILDING.md):
-  - gradle.properties: `systemProp.socksProxyHost=127.0.0.1`,
-    `systemProp.socksProxyPort=10808`, http/https variants via 10809 (v2rayN)
-  - settings.gradle mirror profile: Aliyun/Tencent Maven mirrors
-    (reachable WITHOUT proxy — sidesteps Google's region blocks entirely)
-  - mirrored `distributionUrl` for Gradle wrapper
-  - Android Studio: Settings → HTTP Proxy notes
-- `[ ]` **CI builds APK** (GitHub runners are not sanctioned): release workflow
-  assembles + signs (keystore as repo secret), attaches to GitHub Release.
-  Local builds optional, never required for releases.
+### Repo layout (create under `/android` in this repo)
+
+```
+android/
+  settings.gradle.kts          # pluginManagement w/ mirror profile (see kit)
+  build.gradle.kts             # root; versions catalog inline
+  gradle/wrapper/*             # wrapper committed; distributionUrl mirrored
+  app/
+    build.gradle.kts           # compose, minSdk 26 / targetSdk 34, OkHttp dep
+    src/main/AndroidManifest.xml
+    src/main/java/com/saman/batterymusic/
+      MainActivity.kt          # Compose host: Onboarding → Dashboard (~250 LOC)
+      PairScreen.kt            # 6-digit code entry + worker-url field + TEST btn
+      DashScreen.kt            # status card, ARM toggle, last-alert line
+      ApiClient.kt             # OkHttp: register/pair-link/alert/poll/clear (~80)
+      Prefs.kt                 # EncryptedSharedPreferences(token, worker_url)
+      PowerReceiver.kt         # ACTION_POWER_DISCONNECTED → enqueue ThiefWorker
+      ThiefWorker.kt           # expedited WorkManager POST THIEF_ALERT + backoff
+      BatteryWorker.kt         # periodic 15-min threshold alert / auto-clear
+      SirenPlayer.kt           # optional MediaPlayer loop on unplug
+      Notifications.kt         # armed-charging foreground channel/notification
+    src/test/java/...          # pure-JVM: ApiClient parse tests, policy tests
+docs/android/BUILDING.md       # Build-from-Iran kit (content below)
+.github/workflows/android-build.yml
+```
+
+### Phased delivery (each phase = one session, each ends committed+green)
+
+- **3a — skeleton + onboarding**: gradle project builds via CI on first push;
+  PairScreen pairs against PROD relay using a laptop-generated code;
+  big "SEND TEST ALERT" button lands in `/admin/stats` daily counters.
+  *Acceptance: real phone shows test alert in relay telemetry.*
+- **3b — thief**: PowerReceiver (manifest-declared) enqueues expedited
+  ThiefWorker on unplug while armed; armed state = foreground service
+  (`foregroundServiceType=dataSync`, POST_NOTIFICATIONS runtime perm on 13+)
+  active only while charging-and-armed. *Acceptance: unplug → staging sees
+  THIEF_ALERT <5s (measure like cross_os rig).*
+- **3c — watcher + siren**: BatteryWorker periodic (15-min WorkManager floor)
+  posting threshold alerts + auto-clear; optional SirenPlayer loop.
+- **3d — Iran kit + CI artifact**: BUILDING.md + android-build.yml producing
+  debug-signed APK artifact every push; release workflow attaches to GitHub Release.
+
+### Build-from-Iran kit (BUILDING.md content)
+
+- `gradle.properties`: `systemProp.socksProxyHost=127.0.0.1`,
+  `systemProp.socksProxyPort=10808`; for http proxies use 10809 variants.
+  NOTE: Gradle's socks support is flaky — prefer v2rayN **http** inbound.
+- `settings.gradle.kts` mirror profile blocks (commented defaults):
+  Aliyun `maven.aliyun.com/repository/{public,google}` + Tencent mirrors —
+  reachable WITHOUT any proxy, sidestepping Google's region blocks.
+- Wrapper `distributionUrl` mirrored to Aliyun mirror of services.gradle.org.
+- Android Studio: Settings → HTTP Proxy → manual 127.0.0.1:10809 notes.
+
+### CI (android-build.yml)
+
+ubuntu runner · JDK 17 temurin · `gradle assembleDebug` (+ `assembleRelease`
+once keystore secret exists) · upload-artifact the APK · no Play Store ever.
+
+### Agent notes
+
+- Zero backend changes required — pairing already issues per-phone
+  `linked_token` (v2.0 design); phone and laptop coexist on one account.
+- Keep total Kotlin ≤ ~500 LOC goal; no DI frameworks, no Retrofit.
+- Test policy: pure-JVM JUnit for ApiClient JSON parsing + worker input
+  validation; instrumentation deferred (manual QA via Phase 5 checklist).
 
 ## Phase 4 — CI/CD, Termux One-Click, Docs  `[*]`
 
@@ -191,9 +252,10 @@ Repo layout `/android`. Compose UI, minSdk 26, ~500 LOC goal. Zero backend chang
   hosted via `curl -sSL ... | bash`
 - `[x]` `termux/shortcuts/`: "Start Monitor" + "Arm Thief" Termux:Widget scripts
   (wake-lock acquired automatically in both)
-- `[ ]` README rewrite: GUI GIF hero, 3-step quickstart, security model page,
-  VPN matrix done ✓ but full rewrite pending GUI; SECURITY.md; `/privacy`
-  page on worker
+- `[ ]` README polish leftovers → **SESSION B below**: GIF hero (owner records
+  25-30s per shot-list; agent ffmpeg-optimizes + embeds), 3-step quickstart trim.
+  Already shipped: security model page ✓, platforms matrix ✓, censorship
+  playbook ✓, self-host section ✓, SECURITY.md ✓, `/privacy` both backends ✓
 
 ## Phase 5 — QA Matrix & Launch  `[*]`
 
@@ -221,7 +283,7 @@ Repo layout `/android`. Compose UI, minSdk 26, ~500 LOC goal. Zero backend chang
 
 ---
 
-## Phase 6 — Node.js + PostgreSQL Relay (`relay-node/`)  `[ ]`
+## Phase 6 — Node.js + PostgreSQL Relay (`relay-node/`)  `[*]`
 
 Self-hostable drop-in alternative to the CF Worker. Same API surface and
 security model byte-for-byte; Python/Termux clients only change `worker_url`.
@@ -288,7 +350,137 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
 - `[x]` Public deploy prep: render.yaml blueprint (migrations chained into
   start command), Railway notes, Upstash-for-REDIS_URL instructions.
   Owner action when ready: create the Render/Railway account + Upstash, click deploy.
-- `[ ]` HTML admin dashboard like the worker's (post-launch roadmap)
+- `[*]` HTML admin dashboard → **spec'd in SESSION A below, Part 2**
+
+---
+
+## SESSION A — EXE IDENTITY + RELAY ADMIN DASHBOARD  (next build session)
+
+> Agent-ready spec. Do Part 1 then Part 2, commit per part, run verifications.
+
+### Part 1 — Exe icon + Windows version resource
+
+1. **Create `tools/make_icon.py`** (stdlib + Pillow only). Draws the brand
+   battery glyph matching the tray aesthetic: body rounded-rect fill
+   `#1a1a2e`, outline `#30475e` w=3, terminal nub, charge-fill `#00d478`
+   at ~70% height. Renders sizes [256,128,64,48,32,16] and saves a single
+   multi-resolution **`battery_notifier/assets/icon.ico`**. Idempotent.
+   Run it once; commit the .ico AND the script.
+2. **`battery_gui.spec`**: add `icon='battery_notifier/assets/icon.ico'`;
+   generate a Windows version resource at spec-parse time from
+   `battery_notifier.__version__` (ProductVersion/FileVersion = "2.0.0.0",
+   ProductName "Battery Music Notifier", FileDescription, LegalCopyright MIT)
+   via PyInstaller `version=` file.
+3. Rebuild via scripts/build_gui_exe.ps1 → verify
+   `(Get-Item dist\battery-music-gui.exe).VersionInfo.ProductVersion -eq '2.0.0.0'`
+   + owner eyeballs Explorer icon.
+4. Commit: `gui exe: brand icon + windows version resource`.
+
+### Part 2 — Relay-node HTML admin dashboard
+
+New file **`relay-node/src/routes/admin_dashboard.js`** (~180 LOC), mounted in
+server.js before the JSON admin router; reuses adminAuth + shared stats query.
+
+Routes:
+- `GET /admin` → no session: login page (POST /admin/login, localStorage key
+  like CF worker). Session: full page with stat cards, **30-day SVG sparkline**
+  over daily_stats (ascending polyline + today caption), recent-users table
+  (Ban/Unban per row hitting existing JSON endpoints), Broadcast/Clear-all,
+  Audit tab fetching new `GET /admin/audit.json?lines=200`.
+- `/admin/audit.json` returns parsed tail of config.auditFile as JSON array.
+
+Security requirements (non-negotiable):
+- escapeHtml on EVERY user-controlled interpolation (copy semantics from
+  worker/worker.js)
+- reuse adminAuth middleware; tokens never in URLs
+- CSP meta: default-src 'none'; style-src 'unsafe-inline'; script-src
+  'unsafe-inline'; img-src data:
+- Refactor: extract stats query block from routes/admin.js into an exported
+  collectStats() so JSON and HTML share one source of truth.
+
+Tests — new `relay-node/test/admin_dashboard.test.js` (supertest pattern):
+- unauth GET /admin → contains "Admin Login", lacks stats markup
+- with session → 200; register hostile device name via API first, then assert
+  ESCAPED form present and raw `<script>` absent
+- sparkline `<polyline` present; /admin/audit.json shape asserted after ban
+
+Run full relay suite green. Commit: `relay: html admin dashboard (sparkline, audit tab)`.
+
+---
+
+## SESSION B — RENDER GO-LIVE + GIF HERO  (after owner pushes)
+
+### Render runbook (owner clicks, agent verifies)
+
+1. Owner: dashboard.render.com → New → Blueprint → repo → pick
+   relay-node/render.yaml → fill ADMIN_KEY → Apply (migrations auto-run).
+2. Agent smoke vs https://battery-relay.onrender.com: health 200 +
+   register/alert/poll roundtrip (expect ~30s cold start on free tier).
+3. README live-demo badge + plan.md tick.
+
+### GIF hero shot-list (owner records ~30 s @1080p, Win+G/OBS)
+
+1. Dashboard battery ring ticking (5 s)  2. Thief toggle ARM pulse + grace ring (4 s)
+3. Unplug charger → alarm fires (6 s)    4. Re-plug → stops (3 s)
+5. Pair QR reveal (3 s)                  6. Settings save toast (3 s)
+
+Agent post-processing: ffmpeg two-pass palette GIF ≤8 MB → docs/demo.gif,
+embed under README title + poster fallback; capture Dashboard/Settings PNGs.
+
+---
+
+## AGENT HANDOFF — ENVIRONMENT, SECRETS & CONVENTIONS
+
+Read before touching anything. Written 2026-08-25 after 7 sessions.
+
+### Machine quirks (this dev box)
+
+- **WMI can wedge system-wide** → platform.system()/PowerShell freeze.
+  Mitigations shipped: sysprobe.py (safe_system timeout + wmi_wedged flag),
+  proc_safe.py bounded_run tree-kill runner, connection circuit breaker
+  `_ps_wedged`, win10toast import gated on wedge. NEVER call
+  platform.system() or unbounded subprocess directly; use sysprobe.safe_system()
+  / proc_safe.*. pytest global timeout=120 (pyproject).
+- **WSL Debian** (user ashmas). Mirrored networking half-applied: Debian
+  reaches Windows services via localhost:<port> ONLY for docker-published
+  ports unless firewall rule `battery-crossos` exists (it does: 8802-8805,18080
+  from 172.16/12). v2rayN socks = Windows 127.0.0.1:10808, bridged to WSL by
+  docker container `wsl-fwd` (socat 18080→10808). Linux tests needing CF:
+  export HTTPS_PROXY=socks5h://127.0.0.1:18080 (requests+PySocks handles).
+- Debian env ~/battsrc/venv was provisioned OFFLINE from wheelhouse at
+  %TEMP%\opencode\wheelhouse (psutil needed manylinux wheel). After editing
+  repo files RE-COPY into ~/battsrc — it is a snapshot, edits don't propagate.
+- Docker Desktop engine sleeps when WSL idles → restart app if daemon down;
+  relay compose (db :55432, redis) dies on WSL shutdown → revive with
+  `docker compose up -d db redis` before relay tests.
+
+### Deployments live right now
+
+- PROD CF worker: https://battery-relay.sthidontknow.workers.dev
+  D1 battery-relay-db id 633974ee-2bcd-41f6-aaa3-59660c003815 · account
+  676b8dc1e602b07651025cd852573949
+- STAGING CF worker: https://battery-relay-staging.sthidontknow.workers.dev
+  D1 battery-relay-staging-db id c1ccfa5c-f6f2-4baf-8ecb-568df4d7ff35 ·
+  ADMIN_KEY secret = yn5yxf639emldcaq7jhzrk0ov
+- relay-node PROD ADMIN_KEY: %USERPROFILE%\battery-admin-key.txt (starts 'y')
+- Orphan old worker late-snow-3100.* lives on account 600d5fc08818abb72162e5dafca7f27f — delete whenever.
+- SECRETS ROTATION STILL OWED: ghp_ PAT + cfut_ token both hit chat history.
+
+### Test conventions
+
+- Python: global per-test timeout=120; live+adversarial marked `-m live`;
+  register calls back off 62s on 429 (shared-IP cap 10/min); device markers
+  unique per run (`${name}-${Date.now()}`); UTC day math must use the
+  dayOffset(today,-1) helper style — never Date.now()-86400000.
+- Node: files serial (--test-concurrency=1); every file self-skips when DB
+  down; teardown = server.close() + db pool.end() (+ forced exit fallback in
+  api.test.js).
+- Commits: lowercase, short, human phrasing, one logical chunk each.
+
+### Rule for agents editing source
+
+Use Edit/Write tools ONLY. Never inline PowerShell/python -c string surgery
+on source files (caused a syntax break once already).
 
 ---
 
@@ -302,6 +494,12 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
 - ❌ iOS anything
 
 ## Session Log (context for future sessions)
+
+- 2026-08-25 (session 8, planning): Backlog + Phase 3 spec'd in full detail
+  for agent handoff — SESSION A (exe icon/version + relay HTML dashboard),
+  SESSION B runbook (Render go-live + GIF shot-list), Kotlin Phase 3 file
+  tree/phases/locked decisions, and the AGENT HANDOFF environment section.
+  Next executor: follow SESSION A top-to-bottom.
 
 - 2026-08-24: Full audit + real-device-free integration testing done (see Findings).
   Fixed live: config.toml repaired (backup at config.toml.bak), graceful TOML
