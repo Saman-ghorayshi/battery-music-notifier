@@ -47,9 +47,12 @@ def _api(path, method="GET", token=None, body=None, timeout=15, extra_headers=No
 
 
 def _register(name):
-    """Returns the plaintext token."""
-    s, b = _api("/api/register", "POST",
-                body={"device_name": f"{name}-{_tag}", "platform": "test"})
+    """Returns the plaintext token. Backs off once if the per-ip cap bites."""
+    body = {"device_name": f"{name}-{_tag}", "platform": "test"}
+    s, b = _api("/api/register", "POST", body=body)
+    if s == 429:
+        time.sleep(62)
+        s, b = _api("/api/register", "POST", body=body)
     assert s == 200, (s, b)
     return b["token"]
 
