@@ -565,10 +565,26 @@ async function handlePairGenerate(request, db, user) {
 }
 
 async function handlePairLink(request, db) {
-  // Brute-force shield: 6 digits = 900k space; without this cap an attacker
-  // hammering during a live 5-min window has a real hit probability.
-  if (!checkRateLimit("pair:" + clientIp(request), PAIR_LINK_MAX)) {
-    return json({ ok: false, error: "rate_limited" }, 429);
+  // Brute-force shield: 6 digits = 900k space. In-memory caps are per-isolate
+  // and can be spread across CF isolates, so pair-link uses a GLOBAL D1
+  // counter per IP per minute. Only attackers generate writes here.
+  const ip = clientIp(request);
+  const minuteBucket = Math.floor(now() / RATE_LIMIT_WINDOW);
+  const pfKey = `${ip}:${minuteBucket}`;
+  try {
+    await db.prepare(
+      `INSERT INTO pair_fails (ip_window, fails, ts) VALUES (?, 1, ?)
+       ON CONFLICT (ip_window) DO UPDATE SET fails = fails + 1`
+    ).bind(pfKey, now()).run();
+    const { results } = await db.prepare(
+      "SELECT fails FROM pair_fails WHERE ip_window = ?"
+    ).bind(pfKey).all();
+    if ((results[0]?.fails || 0) > PAIR_LINK_MAX) {
+      return json({ ok: false, error: "rate_limited" }, 429);
+    }
+  } catch (e) {
+    // Shield failure must not break legitimate pairing -- fail open.
+    console.error("pair shield error:", e.message);
   }
   const body = await request.json().catch(() => ({}));
   const code = body.code;
@@ -606,13 +622,18 @@ export default {
     const path = url.pathname;
 
     // Incident kill switch: /api/* closes; health + admin stay reachable.
+    // NOTE: always drain the request body before an early response --
+    // replying without consuming the body stalls the TCP stream.
     if (env.MAINTENANCE_MODE === "1" && path.startsWith("/api/")) {
+      try { await request.arrayBuffer(); } catch (_) {}
       return json({ ok: false, error: "maintenance" }, 503);
     }
 
-    // Body-size gate: reject oversized payloads before reading/parsing.
+    // Body-size gate: reject oversized payloads before parsing. We still
+    // drain the bytes so the client's send() completes cleanly.
     const contentLength = parseInt(request.headers.get("Content-Length") || "0", 10);
     if (contentLength > MAX_BODY_BYTES) {
+      try { await request.arrayBuffer(); } catch (_) {}
       return json({ ok: false, error: "payload_too_large" }, 413);
     }
 
