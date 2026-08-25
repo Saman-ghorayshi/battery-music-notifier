@@ -3,8 +3,9 @@
 const express = require("express");
 const pool = require("../db");
 const config = require("../config");
-const { sha256, randomToken, now, sixDigitCode } = require("../util");
+const { sha256, randomToken, now, sixDigitCode, clientIp } = require("../util");
 const { ensureDailyStats, incrPairings } = require("../stats");
+const { checkRateLimit } = require("../rateLimit");
 const { authUser, purgeExpired } = require("../auth");
 
 const router = express.Router();
@@ -20,8 +21,13 @@ router.post("/api/pair/generate", authUser, async (req, res) => {
   res.json({ ok: true, code, expires_in: config.pairTtlSec });
 });
 
-// ---- POST /api/pair/link ---------------------------------------------------
+// ---- POST /api/pair/link -----------------------------------------------------
 router.post("/api/pair/link", async (req, res) => {
+  // Brute-force shield: 6 digits = 900k space; without this cap an attacker
+  // hammering during a live window has a real hit probability.
+  if (!(await checkRateLimit("pair:" + clientIp(req), config.pairLinkMax))) {
+    return res.status(429).json({ ok: false, error: "rate_limited" });
+  }
   const body = req.body || {};
   const code = String(body.code || "");
   if (!/^\d{6}$/.test(code)) {
@@ -50,7 +56,9 @@ router.post("/api/pair/link", async (req, res) => {
     "UPDATE users SET linked_token = $1, last_seen = $2 WHERE user_id = $3",
     [sha256(linkedToken), now(), record.user_id],
   );
-  incrPairings().catch(() => {});
+  // Awaited: the pairing counter is asserted by tests and must land before
+  // the response does. DB errors here are non-fatal (swallowed).
+  await incrPairings().catch(() => {});
 
   res.json({ ok: true, token: linkedToken });
 });

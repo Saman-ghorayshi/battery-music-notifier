@@ -46,11 +46,19 @@ router.post("/api/alert", authUser, async (req, res) => {
   // its rate-limit bypass and get stored as a different type
   const alertType = String(body.alert_type || "BATTERY").trim().toUpperCase().slice(0, 20);
 
-  // THIEF_ALERT always bypasses rate limiting -- a thief unplugging the
-  // charger must get through even if the device has been polling heavily.
+  // THIEF_ALERT always bypasses the *user* rate limit -- a thief unplugging
+  // the charger must get through even if the device has been polling heavily.
+  // It still consumes a generous per-IP bucket so a rogue token can't burn
+  // unlimited CPU/D1 (120/min; legit phones never get close).
   const isCriticalAlert = alertType === "THIEF_ALERT";
-  if (!isCriticalAlert && config.rateLimitEnabled && !(await checkRateLimit(req.user.user_id))) {
-    return res.status(429).json({ ok: false, error: "rate_limited" });
+  if (config.rateLimitEnabled) {
+    if (isCriticalAlert) {
+      if (!(await checkRateLimit("thiefip:" + clientIp(req), config.thiefIpMax))) {
+        return res.status(429).json({ ok: false, error: "rate_limited" });
+      }
+    } else if (!(await checkRateLimit(req.user.user_id))) {
+      return res.status(429).json({ ok: false, error: "rate_limited" });
+    }
   }
   purgeExpired(pool);
   ensureDailyStats().catch(() => {});

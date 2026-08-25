@@ -25,7 +25,13 @@ module.exports = {
   userRateMax: 30,        // requests/min/user (THIEF_ALERT exempt)
   registerRateMax: 10,    // registrations/min/IP
   adminLoginMax: 5,       // failed admin logins/min/IP
+  pairLinkMax: 10,        // pair-link attempts/min/IP (brute shield)
+  thiefIpMax: 120,        // THIEF_ALERT per IP per minute (generous ceiling)
+  authFailLimit: 50,      // failed bearer lookups/hour/token-hash -> denied
   sessionTtlSec: 3600,    // admin session lifetime
   pairTtlSec: 300,        // pairing code lifetime
   maxEventsPerUser: 200,  // bounded per-user event log
+
+  // Incident kill switch: "1" answers 503 on /api/* (health/admin stay up).
+  maintenance: process.env.MAINTENANCE_MODE === "1",
 };

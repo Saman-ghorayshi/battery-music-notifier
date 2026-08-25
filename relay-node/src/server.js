@@ -9,15 +9,25 @@ const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "16kb" })); // payloads are tiny; cap abuse
 
-// CORS parity with worker.js (permissive: clients may live anywhere).
+// Security headers on everything. No CORS by design: native clients ignore
+// it and the dashboard is same-origin, so wildcard only helped abusers.
 app.use((req, res, next) => {
   res.set({
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
   });
   if (req.method === "OPTIONS") return res.status(204).end();
+  next();
+});
+
+// Incident kill switch: /api/* closes; health + admin stay reachable.
+// Reads env dynamically so tests (and ops) can flip it without restart.
+app.use((req, res, next) => {
+  if (process.env.MAINTENANCE_MODE === "1" && req.path.startsWith("/api/")) {
+    return res.status(503).json({ ok: false, error: "maintenance" });
+  }
   next();
 });
 
@@ -32,6 +42,12 @@ app.use(require("./routes/admin"));
 // 404 + error handling in the workers' JSON dialect.
 app.use((req, res) => res.status(404).json({ ok: false, error: "not_found" }));
 app.use((err, _req, res, _next) => {
+  if (err.type === "entity.too.large" || err.statusCode === 413) {
+    return res.status(413).json({ ok: false, error: "payload_too_large" });
+  }
+  if (err.type === "entity.parse.failed") {
+    return res.status(400).json({ ok: false, error: "invalid_body" });
+  }
   console.error("[server]", err.message);
   res.status(500).json({ ok: false, error: "internal_error" });
 });

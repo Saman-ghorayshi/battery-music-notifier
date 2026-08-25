@@ -25,7 +25,13 @@ router.post("/admin/login", async (req, res) => {
   }
   const body = req.body || {};
   const provided = String(body.admin_key || "");
-  if (provided.length < 10 || provided !== config.adminKey) {
+  // constant-time compare (lengths differ -> not equal, no secret leak)
+  const a = Buffer.from(provided);
+  const b = Buffer.from(config.adminKey || "");
+  const keyOk = provided.length >= 10 &&
+    a.length === b.length &&
+    require("crypto").timingSafeEqual(a, b);
+  if (!keyOk) {
     audit(req, "admin_login_failed", { reason: "bad key" });
     return res.status(401).json({ ok: false, error: "invalid_key" });
   }
