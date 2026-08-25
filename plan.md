@@ -360,7 +360,7 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
 
 ### Part 1 — Exe icon + Windows version resource
 
-1. **Create `tools/make_icon.py`** (stdlib + Pillow only). Draws the brand
+1. [x] **Create `tools/make_icon.py`** (stdlib + Pillow only). Draws the brand
    battery glyph matching the tray aesthetic: body rounded-rect fill
    `#1a1a2e`, outline `#30475e` w=3, terminal nub, charge-fill `#00d478`
    at ~70% height. Renders sizes [256,128,64,48,32,16] and saves a single
@@ -374,7 +374,7 @@ security model byte-for-byte; Python/Termux clients only change `worker_url`.
 3. Rebuild via scripts/build_gui_exe.ps1 → verify
    `(Get-Item dist\battery-music-gui.exe).VersionInfo.ProductVersion -eq '2.0.0.0'`
    + owner eyeballs Explorer icon.
-4. Commit: `gui exe: brand icon + windows version resource`.
+4. `[x]` DONE - rebuilt exe: ProductVersion 2.0.0.0 embedded, icon extractable, boots clean.
 
 ### Part 2 — Relay-node HTML admin dashboard
 
@@ -404,7 +404,7 @@ Tests — new `relay-node/test/admin_dashboard.test.js` (supertest pattern):
   ESCAPED form present and raw `<script>` absent
 - sparkline `<polyline` present; /admin/audit.json shape asserted after ban
 
-Run full relay suite green. Commit: `relay: html admin dashboard (sparkline, audit tab)`.
+Run full relay suite green. [x] DONE - full relay suite green incl. new dashboard tests.
 
 ---
 
