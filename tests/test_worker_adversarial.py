@@ -67,15 +67,15 @@ def _admin_session():
 
 # ---- transport / CORS ------------------------------------------------------
 
-def test_options_preflight_has_cors():
-    """OPTIONS must answer 2xx with the CORS headers workers promise."""
+def test_options_preflight_no_wildcard_cors():
+    """v2.0 security stance: no CORS headers at all (native clients don't
+    need them, dashboard is same-origin). OPTIONS still answers 204."""
     import urllib.request
     req = urllib.request.Request(f"{WORKER_URL}/api/alert?_t={time.time()}",
                                  method="OPTIONS", headers=UA)
     with urllib.request.urlopen(req, timeout=10) as r:
-        assert 200 <= r.status < 300
-        assert r.headers.get("Access-Control-Allow-Origin") == "*"
-        assert "Authorization" in (r.headers.get("Access-Control-Allow-Headers") or "")
+        assert r.status == 204
+        assert "Access-Control-Allow-Origin" not in r.headers, "wildcard CORS is back!"
 
 
 def test_privacy_page_live():

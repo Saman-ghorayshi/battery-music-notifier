@@ -484,31 +484,31 @@ on source files (caused a syntax break once already).
 
 ---
 
-## Phase 7 — Security Hardening Pass  `[ ]`
+## Phase 7 — Security Hardening Pass  `[x]`
 
 > Threat-model pass after live deployments. Full gap analysis + mitigations
 > reviewed with owner 2026-08-25. Non-goals recorded at bottom.
 
 ### P0 — close real gaps (SESSION C)
 
-- `[ ]` **Pair-link brute-force shield**: `/api/pair/link` gets per-IP
+- `[x]` **Pair-link brute-force shield**  ✓ VERIFIED LIVE vs staging+prod (D1-backed GLOBAL counter after per-isolate caps proved dodgeable): `/api/pair/link` gets per-IP
   10/min limiter (6-digit space = 900k; unthrottled guessing during a live
   window had ~6% hit probability). Both backends. `PAIR_LINK_MAX=10`.
-- `[ ]` **Thief IP budget**: THIEF_ALERT keeps bypassing the *user* limit
+- `[x]` **Thief IP budget**: THIEF_ALERT keeps bypassing the *user* limit
   but consumes a generous per-IP bucket (`THIEF_IP_MAX=120/min`) so a rogue
   token cannot burn unlimited CPU/D1. Respects RATE_LIMIT_ENABLED=false.
-- `[ ]` **Body-size gate (worker)**: reject `Content-Length > 16384` with
+- `[x]` **Body-size gate (worker)**  ✓ prod adversarial verified; early responses now DRAIN request bodies (TCP stall bug found+fixed on prod): reject `Content-Length > 16384` with
   413 before parsing (relay-node express cap already existed).
-- `[ ]` **Drop wildcard CORS**: native clients ignore CORS; dashboard is
+- `[x]` **Drop wildcard CORS**  ✓ absence asserted by tests: native clients ignore CORS; dashboard is
   same-origin. Removes the drive-by browser abuse vector entirely. Adversarial
   test flips to assert ABSENCE of Access-Control-Allow-Origin.
-- `[ ]` **MAINTENANCE_MODE kill switch**: env flag answers 503 on /api/*
+- `[x]` **MAINTENANCE_MODE kill switch**  ✓ valve test green: env flag answers 503 on /api/*
   while health+admin stay up. Incident response without redeploying.
-- `[ ]` **Rogue-token auto-contain**: ≥50 failed bearer lookups per hour per
+- `[x]` **Rogue-token auto-contain**  ✓ deny-set observable via "denied" error, tested: ≥50 failed bearer lookups per hour per
   token-hash → instant `403 {"error":"denied"}` from an in-memory deny-set
   (zero DB hits). Observable via distinct error string.
-- `[ ]` `timingSafeEqual` for relay-node admin-key compare.
-- `[ ]` Security headers everywhere: X-Content-Type-Options, Referrer-Policy,
+- `[x]` `timingSafeEqual` for relay-node admin-key compare.
+- `[x]` Security headers everywhere: X-Content-Type-Options, Referrer-Policy,
   X-Frame-Options:DENY.
 
 Tests: new relay `security_hardening.test.js` + `maintenance.test.js`;
