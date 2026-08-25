@@ -25,30 +25,17 @@ _ps_wedged = False
 
 
 def _bounded_run(args, timeout=5.0) -> str:
-    """subprocess.run that survives children holding the pipes.
-
-    Plain run(timeout=) can't reap a powershell that spawned its own
-    children (they inherit stdout/stderr, communicate() waits for EOF).
-    We kill the whole tree with taskkill /T instead.
-    """
+    """Backwards-compatible alias; see proc_safe.bounded_run."""
     global _ps_wedged
     if _ps_wedged and args and "powershell" in str(args[0]).lower():
         return ""
-    p = subprocess.Popen(args, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True)
-    try:
-        out, _ = p.communicate(timeout=timeout)
-        return out or ""
-    except subprocess.TimeoutExpired:
+    from . import proc_safe
+    out = proc_safe.bounded_run(args, timeout=timeout)
+    if out == "" and proc_safe.last_timed_out:
+        # the tree-kill runner hit a hang -> trip our powershell breaker too
         _ps_wedged = True
-        log.warning("subprocess %s timed out; killing tree and skipping "
-                    "further powershell probes", args[0])
-        try:
-            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
-                           capture_output=True, timeout=10)
-        except Exception:
-            pass
-        return ""
+        proc_safe.last_timed_out = False
+    return out
 
 
 def safe_platform_system() -> str:

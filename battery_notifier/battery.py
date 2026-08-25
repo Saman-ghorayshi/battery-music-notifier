@@ -24,7 +24,7 @@ class Battery:
                     "and ensure the 'Termux:API' add-on app is installed on your Android device."
                 )
             try:
-                result = subprocess.run(["termux-battery-status"], capture_output=True, text=True, check=True)
+                result = subprocess.run(["termux-battery-status"], capture_output=True, text=True, check=True, timeout=10)
                 data = json.loads(result.stdout)
                 # NOT_CHARGING: charger is connected but battery is not actively
                 # charging (e.g. battery protection/optimized charging on some OEMs).

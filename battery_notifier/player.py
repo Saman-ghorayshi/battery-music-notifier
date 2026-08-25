@@ -103,20 +103,22 @@ class Player:
                             player_cmd + [current_track],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
+                            timeout=15,
                         )
                         while not self._stop.is_set():
                             info = subprocess.run(
                                 ["termux-media-player", "info"],
                                 capture_output=True, text=True,
+                                timeout=5,
                             )
                             if "playing" not in info.stdout.lower():
                                 break
                             time.sleep(0.5)
                         if self._stop.is_set():
-                            subprocess.run(["termux-media-player", "stop"], stdout=subprocess.DEVNULL)
+                            subprocess.run(["termux-media-player", "stop"], stdout=subprocess.DEVNULL, timeout=5)
                             break
                         if not self.annoying:
-                            subprocess.run(["termux-media-player", "stop"], stdout=subprocess.DEVNULL)
+                            subprocess.run(["termux-media-player", "stop"], stdout=subprocess.DEVNULL, timeout=5)
                             break
                     else:
                         # Standard CLI players: process blocks until track finishes

@@ -55,17 +55,19 @@ def auto_setup_usb_bridge(mode: str = "reverse", port: int = 8000, max_retries: 
 
     print("  Listening for USB device connection... Please plug in your phone.")
     
-    # Force start the local adb server
+    # Force start the local adb server (bounded: adb start-server can hang
+    # indefinitely when the adb server itself is wedged)
     try:
-        subprocess.run([adb, "start-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        from .proc_safe import bounded_run, run_ok
+        run_ok([adb, "start-server"], timeout=10)
     except Exception:
         pass
 
     for attempt in range(1, max_retries + 1):
         try:
             # Check for authorized devices
-            result = subprocess.run([adb, "devices"], capture_output=True, text=True, check=True)
-            lines = result.stdout.strip().split("\n")[1:] # Skip header line
+            out = bounded_run([adb, "devices"], timeout=10)
+            lines = out.strip().split("\n")[1:] if out else []  # Skip header line
             
             devices = []
             unauthorized_found = False
@@ -93,7 +95,8 @@ def auto_setup_usb_bridge(mode: str = "reverse", port: int = 8000, max_retries: 
                     cmd = [adb, "-s", target_device, "forward", f"tcp:{port}", f"tcp:{port}"]
                     action_name = "Forward Port Tunnel"
 
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if not run_ok(cmd, timeout=15):
+                    raise RuntimeError(f"{action_name} command failed")
                 print(f"  {action_name} successfully set up over USB on port {port}!")
                 log.info("ADB Auto-Bridge %s set up successfully.", mode)
                 return True
