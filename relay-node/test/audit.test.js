@@ -12,15 +12,31 @@ process.env.DATABASE_URL =
 process.env.ADMIN_KEY = process.env.ADMIN_KEY || "test-admin-key-123";
 process.env.RATE_LIMIT_ENABLED = "false";
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-audit-"));
-process.env.AUDIT_FILE = path.join(tmp, "audit.log");
-
 const request = require("supertest");
+const { Pool } = require("pg");
 
-test("admin actions are audited as jsonl", async () => {
+test("admin actions are audited as jsonl", async (t) => {
+  // bail out cleanly when the database is down
+  {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    try {
+      await pool.query("SELECT 1");
+    } catch (e) {
+      console.log("# database not reachable, skipping:", e.message);
+      t.skip("needs migrated postgres");
+      return;
+    } finally {
+      await pool.end();
+    }
+  }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "relay-audit-"));
+  process.env.AUDIT_FILE = path.join(tmp, "audit.log");
+
   const { start } = require("../src/server");
   const server = await start();
   const base = `http://127.0.0.1:${server.address().port}`;
+  t.after(() => server.close());
 
   await request(base).post("/admin/login").send({ admin_key: "nope-nope-nope" }); // fail
   const login = await request(base)
@@ -32,6 +48,7 @@ test("admin actions are audited as jsonl", async () => {
   const reg = await request(base)
     .post("/api/register")
     .send({ device_name: "audit-target", platform: "test" });
+  assert.equal(reg.status, 200);
   const stats = await request(base).get("/admin/stats").set(h);
   const me = stats.body.recent_users.find((u) => u.device_name === "audit-target");
   await request(base).post("/admin/ban").set(h).send({ user_id: me.user_id });
@@ -56,4 +73,3 @@ test("admin actions are audited as jsonl", async () => {
 
   fs.rmSync(tmp, { recursive: true, force: true });
 });
-

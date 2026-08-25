@@ -116,7 +116,7 @@ test("daily stats rollup", async (t) => {
     const code = "9" + String(Date.now()).slice(-5); // unique-ish 6 digits
     await pool.query(
       "INSERT INTO pairing_codes (code, user_id, expires_at) VALUES ($1, $2, $3)",
-      [code, me.rows[0].user_id, epochOf(today) + 3600],
+      [code, me.rows[0].user_id, Math.floor(Date.now() / 1000) + 3600],
     );
     const before = (await pool.query(
       "SELECT pairings FROM daily_stats WHERE day = $1", [today],

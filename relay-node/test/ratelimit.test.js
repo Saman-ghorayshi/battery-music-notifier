@@ -13,12 +13,27 @@ delete process.env.RATE_LIMIT_ENABLED; // defaults to on
 delete process.env.REDIS_URL; // memory buckets for this run
 
 const request = require("supertest");
+const { Pool } = require("pg");
 
 test("throttles", async (t) => {
+  // bail out cleanly when the database is down
+  {
+    const probe = new Pool({ connectionString: process.env.DATABASE_URL });
+    try {
+      await probe.query("SELECT 1");
+    } catch (e) {
+      console.log("# database not reachable, skipping:", e.message);
+      t.skip("needs migrated postgres");
+      return;
+    } finally {
+      await probe.end();
+    }
+  }
+
   const { start } = require("../src/server");
   const server = await start();
   const base = `http://127.0.0.1:${server.address().port}`;
-    t.after(async () => {
+  t.after(async () => {
     server.close();
     await new Promise((r) => setTimeout(r, 50));
     await require("../src/db").end();
