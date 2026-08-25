@@ -24,6 +24,9 @@ app.use((req, res, next) => {
 app.use(require("./routes/health"));
 app.use(require("./routes/api"));
 app.use(require("./routes/pair"));
+// HTML dashboard first: it owns GET /admin + /admin/audit.json; everything
+// else falls through to the JSON admin API (CLI compatibility).
+app.use(require("./routes/admin_dashboard"));
 app.use(require("./routes/admin"));
 
 // 404 + error handling in the workers' JSON dialect.
