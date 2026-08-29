@@ -1,0 +1,13 @@
+title = "gitleaks config"
+
+# Known historical leak, secret rotated 2026-08-29 (staging ADMIN_KEY was
+# committed to plan.md). Fingerprint allowlisted so history scans stay green;
+# the secret itself is dead.
+[extend]
+useDefault = true
+
+[allowlist]
+  description = "Rotated historical leaks"
+  fingerprints = [
+    "6ad0a2d72de6f7ed66a1680cae81ee71014c199f:plan.md:generic-api-key:464",
+  ]
