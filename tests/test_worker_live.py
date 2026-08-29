@@ -557,17 +557,24 @@ def test_arm_disarm_with_pass():
 
 
 def test_disarm_pass_rate_limit():
-    """6 rapid wrong-pass disarms trip the 5/min per-account shield."""
+    """Wrong-pass disarms trip the 5/min per-account D1 shield.
+
+    Fires up to 12 attempts: even if they straddle two minute buckets, one
+    bucket must accumulate 6 fails and trip the cap.
+    """
     _, reg = _register("arm-rl")
     token = reg["token"]
     _api("/api/pass/setup", "POST", token=token, body={"pass_code": "right-pass-1"})
 
     codes = []
-    for _ in range(6):
+    for _ in range(12):
         s, b = _api("/api/arm", "POST", token=token,
                     body={"armed": False, "pass_code": "wrong-wrong"})
-        codes.append((s, b.get("error")))
-    assert any(s == 429 and b.get("error") == "rate_limited" for s, b in codes), codes
+        err = b.get("error") if isinstance(b, dict) else str(b)[:60]
+        codes.append((s, err))
+        if s == 429:
+            break
+    assert any(s == 429 and err == "rate_limited" for s, err in codes), codes
 
 
 if __name__ == "__main__":

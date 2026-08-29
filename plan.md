@@ -332,6 +332,26 @@ if the face isn't approved." Built on branch `v2.2-realtime-face`.
   switches, last-write-wins with the arming device's name shown; the phone's
   PowerReceiver then keys off the account flag instead of local prefs.
 
+## Phase 3.8 — Remote arm/disarm + disarm pass (v2.3)  `[x code, x live QA staging]`
+
+- `[x]` worker: `users.armed/armed_by/disarm_hash`; `/api/pass/setup`
+  (first-set free, change requires current); `/api/arm` (arm free,
+  disarm pass-gated); poll carries `armed/armed_by/has_pass`
+- `[x]` pass brute shield is **D1-backed** (pair_fails table, 5/min per
+  account, counter cleared on success) -- the in-memory version was beaten
+  by isolate spread in live testing (6 attempts, 6 fresh buckets)
+- `[x]` laptop: guard posts arm(true) and auto-stands-down on remote
+  disarm; `battery-music disarm` + `battery-music pass` commands
+- `[x]` android: ARM toggle drives the account (pass dialog on disarm);
+  ThiefWorker verifies the account flag at send time (fail loud);
+  remote arm nudges via notification (FGS-from-background is
+  platform-blocked); Finish-setup checklist (notifications, battery,
+  pass)
+- `[x]` live staging: 39 pass + 1 env-skip incl. pass lifecycle,
+  pass_required/invalid_pass/change-gating, D1 shield trips on attempt 6
+- `[ ]` owner: choose the real pass on prod after deploy; fresh bot token
+  for real Telegram setup
+
 ## Phase 4 — CI/CD, Termux One-Click, Docs  `[*]`
 
 - `[x]` `.github/workflows/test.yml`: pytest matrix 3.9–3.13 × {ubuntu, windows},

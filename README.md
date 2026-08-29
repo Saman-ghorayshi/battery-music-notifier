@@ -403,6 +403,29 @@ failed logon:
   intruder photo. Opt-out anytime with `/api/notify/clear`. Credentials are
   per-account and never shown in the admin dashboard.
 
+### Remote arm/disarm + disarm pass (v2.3)
+
+The armed state lives on the relay, so **any paired device controls the
+whole system**. Set a disarm pass once (`battery-music pass`, the init
+wizard, or the phone's Finish-setup card):
+
+- **Arming is always free. Disarming -- from any device -- demands the pass.**
+  A thief with your phone can't switch the system off.
+- The pass is stored **only as a SHA-256 hash** on the worker; no plaintext
+  exists anywhere. Forgetting it means resetting it via `wrangler` on your
+  own D1 -- there is intentionally no recovery backdoor.
+- Pass-guessing is capped by a **D1-backed 5/min per-account shield**
+  (in-memory caps don't survive Cloudflare isolates -- found by live tests).
+- The ARM toggle in the app and `battery-music disarm` both act on the
+  account: the guard stands down if you disarm from the phone, and the
+  phone's thief alert checks the account flag at send time, so a remote
+  disarm silences future phone theft alerts too.
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/api/pass/setup` | POST | Bearer | Set/change the disarm pass (hash only) |
+| `/api/arm` | POST | Bearer | Arm (free) / disarm (needs pass when set) |
+
 ### Who can silence what (v2.2.3)
 
 | Action | Stops | Who can do it |

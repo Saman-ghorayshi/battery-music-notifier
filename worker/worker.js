@@ -370,20 +370,38 @@ async function handlePassSetup(request, db, user) {
 }
 
 async function handleArm(request, db, user, env) {
-  // Brute shield on the pass: 5 attempts/min per account. Arming without a
-  // pass also consumes a slot? No -- only pass-carrying attempts count.
+  // Brute shield on the pass: 5 attempts/min per account. MUST be D1-backed
+  // (like pair-link's shield): in-memory buckets don't survive isolates, and
+  // live testing proved 6 attempts can land on 6 fresh buckets.
   const body = await request.json().catch(() => ({}));
   const wantArmed = body.armed ? 1 : 0;
   const pass = (body.pass_code || "").trim();
 
   if (!wantArmed && user.disarm_hash) {
-    if (isRateLimitEnabled(env) && !checkRateLimit("pass:" + user.user_id, PASS_MAX)) {
-      return json({ ok: false, error: "rate_limited" }, 429);
+    const minuteBucket = Math.floor(now() / RATE_LIMIT_WINDOW);
+    const pfKey = `pass:${user.user_id}:${minuteBucket}`;
+    try {
+      await db.prepare(
+        `INSERT INTO pair_fails (ip_window, fails, ts) VALUES (?, 1, ?)
+         ON CONFLICT (ip_window) DO UPDATE SET fails = fails + 1`
+      ).bind(pfKey, now()).run();
+      const { results } = await db.prepare(
+        "SELECT fails FROM pair_fails WHERE ip_window = ?"
+      ).bind(pfKey).all();
+      if ((results[0]?.fails || 0) > PASS_MAX) {
+        return json({ ok: false, error: "rate_limited" }, 429);
+      }
+    } catch (e) {
+      console.error("pass shield error:", e.message); // fail open, like pair-link
     }
     if (!pass) return json({ ok: false, error: "pass_required" }, 401);
     if (await sha256(pass) !== user.disarm_hash) {
       return json({ ok: false, error: "invalid_pass" }, 401);
     }
+    // Success: a legit owner must never be locked out by earlier probes
+    try {
+      await db.prepare("DELETE FROM pair_fails WHERE ip_window = ?").bind(pfKey).run();
+    } catch (_) {}
   }
   await db.prepare(
     "UPDATE users SET armed = ?, armed_by = ?, last_seen = ? WHERE user_id = ?"
