@@ -2,6 +2,7 @@
 """HTTP relay client for the Cloudflare Worker backend.
 Handles registration, sending alerts, polling for alerts, and admin actions."""
 from __future__ import annotations
+import base64
 import json
 import time
 import logging
@@ -81,13 +82,17 @@ class WorkerClient:
     def send_alert(
         self, alert_type: str = "BATTERY",
         battery_pct: int = -1, is_charging: bool = False,
+        snapshot_id: Optional[int] = None,
     ) -> bool:
         """Send an alert through the worker relay."""
-        resp = self._post("/api/alert", {
+        payload = {
             "alert_type": alert_type,
             "battery_pct": battery_pct,
             "is_charging": is_charging,
-        })
+        }
+        if snapshot_id:
+            payload["snapshot_id"] = snapshot_id
+        resp = self._post("/api/alert", payload)
         if resp.get("ok"):
             log.info("Alert sent: type=%s", alert_type)
             return True
@@ -107,6 +112,31 @@ class WorkerClient:
     def poll(self) -> dict:
         """Poll for alert state (laptop checks if phone sent alert)."""
         return self._get("/api/poll")
+
+    # ---- Intruder snapshots (v2.1) ----
+
+    def upload_snapshot(self, image: bytes) -> Optional[int]:
+        """Upload a JPEG/PNG snapshot, returns its snap_id (or None)."""
+        b64 = base64.b64encode(image).decode("ascii")
+        resp = self._post("/api/snapshot", {"image": b64})
+        if resp.get("ok"):
+            return resp.get("snap_id")
+        log.error("Snapshot upload failed: %s", resp.get("error"))
+        return None
+
+    def get_snapshot(self, snap_id: int) -> Optional[bytes]:
+        """Fetch a snapshot by id (must belong to this account)."""
+        try:
+            r = requests.get(
+                f"{self.base_url}/api/snapshot/{snap_id}", headers=self._headers(),
+                proxies=self._proxies, timeout=REQUEST_TIMEOUT,
+            )
+            if r.status_code == 200:
+                return r.content
+            log.error("Snapshot fetch failed: HTTP %s", r.status_code)
+        except Exception as e:
+            log.error("Snapshot fetch failed: %s", e)
+        return None
 
     # ---- Admin API ----
 
