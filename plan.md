@@ -485,8 +485,8 @@ Read before touching anything. Written 2026-08-25 after 7 sessions.
   676b8dc1e602b07651025cd852573949
 - STAGING CF worker: https://battery-relay-staging.sthidontknow.workers.dev
   D1 battery-relay-staging-db id c1ccfa5c-f6f2-4baf-8ecb-568df4d7ff35 ·
-  ADMIN_KEY secret = yn5yxf639emldcaq7jhzrk0ov
-- relay-node PROD ADMIN_KEY: %USERPROFILE%\battery-admin-key.txt (starts 'y')
+  ADMIN_KEY secret: stored locally only (leaked in git history 2026-08-29 — ROTATED, see below)
+- relay-node PROD ADMIN_KEY: %USERPROFILE%\battery-admin-key.txt
 - Orphan old worker late-snow-3100.* lives on account 600d5fc08818abb72162e5dafca7f27f — delete whenever.
 - SECRETS ROTATION STILL OWED: ghp_ PAT + cfut_ token both hit chat history.
 
