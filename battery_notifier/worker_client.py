@@ -113,6 +113,23 @@ class WorkerClient:
         """Poll for alert state (laptop checks if phone sent alert)."""
         return self._get("/api/poll")
 
+    # ---- Account arm/disarm (v2.3) ----
+
+    def set_pass_code(self, pass_code: str, current_pass_code: str = None) -> dict:
+        """Set (first time) or change the account disarm pass. Raw response."""
+        payload = {"pass_code": pass_code}
+        if current_pass_code:
+            payload["current_pass_code"] = current_pass_code
+        return self._post("/api/pass/setup", payload)
+
+    def arm_account(self, armed: bool, pass_code: str = None) -> dict:
+        """Arm/disarm the whole account. Disarming needs the pass when one
+        is set. Raw response (callers need the error strings)."""
+        payload = {"armed": bool(armed)}
+        if pass_code:
+            payload["pass_code"] = pass_code
+        return self._post("/api/arm", payload)
+
     # ---- Intruder snapshots (v2.1) ----
 
     def upload_snapshot(self, image: bytes) -> Optional[int]:

@@ -21,6 +21,33 @@ class BatteryWorker(context: Context, params: WorkerParameters) : Worker(context
 
         val client = prefs.newClient()
         val state = client.poll() ?: return Result.success()
+
+        // Remote arm (e.g. from the laptop): Android forbids starting a
+        // foreground service from the background, so nudge with a
+        // notification the user taps once to activate full watching.
+        if (state.armed && !prefs.armed) {
+            val notifGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+                applicationContext, android.Manifest.permission.POST_NOTIFICATIONS,
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (notifGranted) {
+                Notifications.createChannels(applicationContext)
+                val n = androidx.core.app.NotificationCompat.Builder(
+                    applicationContext, Notifications.CHANNEL_ARMED,
+                )
+                    .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
+                    .setContentTitle("System armed remotely")
+                    .setContentText("Tap to activate watching on this phone")
+                    .setContentIntent(android.app.PendingIntent.getActivity(
+                        applicationContext, 3,
+                        android.content.Intent(applicationContext, MainActivity::class.java),
+                        android.app.PendingIntent.FLAG_IMMUTABLE,
+                    ))
+                    .build()
+                androidx.core.app.NotificationManagerCompat.from(applicationContext)
+                    .notify(Notifications.REMOTE_ARMED_NOTIFICATION_ID, n)
+            }
+        }
+
         val battery = readBatteryPct(applicationContext)
         if (battery < 0) return Result.success()
 

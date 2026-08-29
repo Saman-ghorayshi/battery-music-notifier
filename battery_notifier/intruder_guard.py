@@ -154,6 +154,7 @@ class IntruderGuard:
         self.camera_index = getattr(config, "guard_camera_index", 0) or 0
         self._stop_event = threading.Event()
         self._armed = False
+        self._cycles = 0
         # Events older than this are history, not intrusions; set at arm time
         self._last_seen_event = 0.0
         self._uploads: deque = deque()  # upload timestamps, hourly budget
@@ -168,6 +169,13 @@ class IntruderGuard:
         self._last_seen_event = latest or time.time()
         self._stop_event.clear()
         self._armed = True
+
+        # Account-level arm: the phone sees it and arms its side too
+        if self.worker:
+            r = self.worker.arm_account(True)
+            if not r.get("ok"):
+                log.warning("account arm failed: %s (guard still armed locally)",
+                            r.get("error"))
 
         if verbose:
             if self.face_verdict:
@@ -187,6 +195,16 @@ class IntruderGuard:
             print("  Press Ctrl+C to disarm.\n")
         while not self._stop_event.is_set():
             try:
+                # Remote disarm: if the account was disarmed (from the phone,
+                # with the pass), the guard stands down and exits.
+                if self.worker and self._cycles % 5 == 0:
+                    state = self.worker.poll()
+                    if state.get("ok") and not state.get("armed", 0):
+                        print("  Account was disarmed remotely. Guard standing down.")
+                        log.info("remote disarm detected -- guard exiting")
+                        self._stop_event.set()
+                        break
+                self._cycles += 1
                 self._check_once()
             except Exception as e:
                 log.error("Intruder guard loop error: %s", e)

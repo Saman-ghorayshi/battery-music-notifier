@@ -81,4 +81,5 @@ object Notifications {
 
     const val ACTION_SILENCE = "com.saman.batterymusic.SILENCE"
     const val THIEF_ALERT_NOTIFICATION_ID = 2
+    const val REMOTE_ARMED_NOTIFICATION_ID = 3
 }

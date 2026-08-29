@@ -17,6 +17,9 @@ data class PollState(
     val batteryPct: Int,
     val isCharging: Boolean,
     val snapshotId: Long?,
+    val armed: Boolean = false,
+    val armedBy: String? = null,
+    val hasPass: Boolean = false,
 )
 
 /**
@@ -102,6 +105,9 @@ class ApiClient(private val workerUrl: String, private var token: String) {
                     batteryPct = body.optInt("battery_pct", -1),
                     isCharging = body.optInt("is_charging") == 1,
                     snapshotId = if (body.isNull("snapshot_id")) null else body.optLong("snapshot_id"),
+                    armed = body.optInt("armed", 0) == 1,
+                    armedBy = if (body.isNull("armed_by")) null else body.optString("armed_by"),
+                    hasPass = body.optBoolean("has_pass", false),
                 )
             }
         } catch (e: Exception) {
@@ -118,5 +124,23 @@ class ApiClient(private val workerUrl: String, private var token: String) {
         } catch (e: Exception) {
             null
         }
+    }
+
+    // ---- Account arm/disarm (v2.3): the toggle drives the whole account ----
+
+    /** Set (first time) or change the disarm pass. Pass lives only as a hash. */
+    fun setPass(passCode: String, currentPassCode: String? = null): ApiResult {
+        val body = JSONObject().put("pass_code", passCode)
+        if (currentPassCode != null) body.put("current_pass_code", currentPassCode)
+        val resp = post("/api/pass/setup", body)
+        return ApiResult(resp.optBoolean("ok"), resp.optString("error", "").ifEmpty { null })
+    }
+
+    /** Arm the account freely; disarming needs the pass when one is set. */
+    fun armAccount(armed: Boolean, passCode: String? = null): ApiResult {
+        val body = JSONObject().put("armed", armed)
+        if (passCode != null) body.put("pass_code", passCode)
+        val resp = post("/api/arm", body)
+        return ApiResult(resp.optBoolean("ok"), resp.optString("error", "").ifEmpty { null })
     }
 }

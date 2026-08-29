@@ -432,3 +432,57 @@ def test_no_camera_still_alerts_without_photo(mock_last, mock_grab, mock_config,
     mock_worker.send_alert.assert_called_once_with(
         alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False, snapshot_id=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# v2.3: account-level arm/disarm
+# ---------------------------------------------------------------------------
+
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_remote_disarm_stops_guard(mock_last, mock_grab, mock_config):
+    """Account disarmed from the phone -> guard stands down and exits."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    worker = MagicMock()
+    worker.poll.return_value = {"ok": True, "armed": 0, "alert_active": 0}
+    g = IntruderGuard(mock_config, worker_client=worker)
+    g.arm(verbose=False)  # arm() posts arm(true) then loops
+
+    worker.arm_account.assert_called_once_with(True)
+    # the loop detected the remote disarm and stopped itself
+    assert g.is_armed is False
+
+
+@patch("battery_notifier.worker_client.requests")
+def test_arm_account_payload(mock_requests, mock_config):
+    from battery_notifier.worker_client import WorkerClient
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ok": True, "armed": 0}
+    mock_requests.post.return_value = mock_resp
+
+    wc = WorkerClient("https://test.example.com", token="t" * 24, config=mock_config)
+    r = wc.arm_account(False, pass_code="9999")
+    assert r.get("ok") is True
+    _, kwargs = mock_requests.post.call_args
+    body = kwargs["json"]
+    assert body["armed"] is False
+    assert body["pass_code"] == "9999"
+
+
+@patch("battery_notifier.worker_client.requests")
+def test_set_pass_code_payload(mock_requests, mock_config):
+    from battery_notifier.worker_client import WorkerClient
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ok": True}
+    mock_requests.post.return_value = mock_resp
+
+    wc = WorkerClient("https://test.example.com", token="t" * 24, config=mock_config)
+    wc.set_pass_code("newpass", current_pass_code="oldpass")
+    _, kwargs = mock_requests.post.call_args
+    body = kwargs["json"]
+    assert body == {"pass_code": "newpass", "current_pass_code": "oldpass"}

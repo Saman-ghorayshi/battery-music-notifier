@@ -113,3 +113,82 @@ class ApiClientTest {
         server.shutdown()
     }
 }
+
+// ---------------------------------------------------------------------------
+// v2.3: account-level arm/disarm + disarm pass
+// ---------------------------------------------------------------------------
+
+class ArmApiTest {
+
+    private fun client(server: MockWebServer): ApiClient =
+        ApiClient(server.url("/").toString(), "device-token-123456")
+
+    @Test
+    fun armAccount_true_sends_armed_payload() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":true,"armed":1}"""))
+        server.start()
+        val r = client(server).armAccount(true)
+        assertTrue(r.ok)
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals(true, body.getBoolean("armed"))
+        assertFalse(body.has("pass_code"))
+        server.shutdown()
+    }
+
+    @Test
+    fun disarmAccount_carries_pass_when_set() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":true,"armed":0}"""))
+        server.start()
+        val r = client(server).armAccount(false, "1234")
+        assertTrue(r.ok)
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals(false, body.getBoolean("armed"))
+        assertEquals("1234", body.getString("pass_code"))
+        server.shutdown()
+    }
+
+    @Test
+    fun disarmAccount_surfaces_pass_errors() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":false,"error":"invalid_pass"}"""))
+        server.start()
+        val r = client(server).armAccount(false, "0000")
+        assertFalse(r.ok)
+        assertEquals("invalid_pass", r.error)
+        server.shutdown()
+    }
+
+    @Test
+    fun setPass_first_time_has_no_current_field() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+        server.start()
+        val r = client(server).setPass("hunter2")
+        assertTrue(r.ok)
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals("hunter2", body.getString("pass_code"))
+        assertFalse(body.has("current_pass_code"))
+        server.shutdown()
+    }
+
+    @Test
+    fun poll_parses_armed_and_has_pass() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"alert_active":0,"alert_type":"","battery_pct":50,
+                    "is_charging":1,"snapshot_id":null,"armed":1,
+                    "armed_by":"MyLaptop","has_pass":true}"""
+            )
+        )
+        server.start()
+        val state = client(server).poll()!!
+        assertTrue(state.armed)
+        assertEquals("MyLaptop", state.armedBy)
+        assertTrue(state.hasPass)
+        assertNull(state.snapshotId)
+        server.shutdown()
+    }
+}

@@ -506,6 +506,70 @@ def test_real_telegram_delivery():
     _api("/api/clear", "POST", token=token)
 
 
+# ---- v2.3: account-level arm/disarm + disarm pass (needs migration_arm.sql) ----
+
+def test_arm_disarm_with_pass():
+    """Full pass lifecycle: set, arm free, disarm gated, change gated."""
+    _, reg = _register("arm")
+    token = reg["token"]
+
+    s, b = _api("/api/poll", "GET", token=token)
+    assert b["armed"] == 0 and b["has_pass"] is False
+
+    # arm: always free
+    s, b = _api("/api/arm", "POST", token=token, body={"armed": True})
+    assert s == 200 and b["armed"] == 1, b
+    s, b = _api("/api/poll", "GET", token=token)
+    assert b["armed"] == 1 and b["armed_by"], b
+
+    # disarm without a pass set: allowed (no pass configured yet)
+    s, b = _api("/api/arm", "POST", token=token, body={"armed": False})
+    assert s == 200, b
+
+    # set the pass; poll now reports it
+    s, b = _api("/api/pass/setup", "POST", token=token, body={"pass_code": "test-pass-123"})
+    assert s == 200, b
+    s, b = _api("/api/poll", "GET", token=token)
+    assert b["has_pass"] is True
+
+    # disarm now requires the pass
+    s, b = _api("/api/arm", "POST", token=token, body={"armed": False})
+    assert s == 401 and b["error"] == "pass_required", b
+    s, b = _api("/api/arm", "POST", token=token, body={"armed": False, "pass_code": "wrong"})
+    assert s == 401 and b["error"] == "invalid_pass", b
+    s, b = _api("/api/arm", "POST", token=token, body={"armed": False, "pass_code": "test-pass-123"})
+    assert s == 200 and b["armed"] == 0, b
+
+    # changing the pass requires the current one
+    s, b = _api("/api/pass/setup", "POST", token=token, body={"pass_code": "newpass-999"})
+    assert s == 401 and b["error"] == "current_pass_required", b
+    s, b = _api("/api/pass/setup", "POST", token=token,
+                body={"pass_code": "newpass-999", "current_pass_code": "nope"})
+    assert s == 401 and b["error"] == "invalid_pass", b
+    s, b = _api("/api/pass/setup", "POST", token=token,
+                body={"pass_code": "newpass-999", "current_pass_code": "test-pass-123"})
+    assert s == 200, b
+
+    # arming still never asks for a pass
+    s, b = _api("/api/arm", "POST", token=token, body={"armed": True})
+    assert s == 200, b
+    _api("/api/arm", "POST", token=token, body={"armed": False, "pass_code": "newpass-999"})
+
+
+def test_disarm_pass_rate_limit():
+    """6 rapid wrong-pass disarms trip the 5/min per-account shield."""
+    _, reg = _register("arm-rl")
+    token = reg["token"]
+    _api("/api/pass/setup", "POST", token=token, body={"pass_code": "right-pass-1"})
+
+    codes = []
+    for _ in range(6):
+        s, b = _api("/api/arm", "POST", token=token,
+                    body={"armed": False, "pass_code": "wrong-wrong"})
+        codes.append((s, b.get("error")))
+    assert any(s == 429 and b.get("error") == "rate_limited" for s, b in codes), codes
+
+
 if __name__ == "__main__":
     import sys
     tests = [
@@ -530,6 +594,8 @@ if __name__ == "__main__":
         test_alert_carries_snapshot_id,
         test_notify_setup_and_clear,
         test_real_telegram_delivery,
+        test_arm_disarm_with_pass,
+        test_disarm_pass_rate_limit,
     ]
     passed = failed = 0
     for t in tests:

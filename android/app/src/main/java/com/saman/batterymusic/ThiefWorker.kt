@@ -17,8 +17,15 @@ class ThiefWorker(context: Context, params: WorkerParameters) : Worker(context, 
         val prefs = Prefs.get(applicationContext)
         if (!prefs.hasToken()) return Result.failure()
 
+        val client = prefs.newClient()
+        // The account flag is the truth: a remote disarm silences this phone,
+        // a remote arm (done from the laptop) protects it. No token or
+        // network problem defaults to ALERTING -- fail loud, not silent.
+        val state = client.poll()
+        if (state != null && !state.armed) return Result.success()
+
         val battery = readBatteryPct(applicationContext)
-        val result = prefs.newClient().sendAlert("THIEF_ALERT", battery, charging = false)
+        val result = client.sendAlert("THIEF_ALERT", battery, charging = false)
         if (result.ok) {
             SirenPlayer.start(applicationContext) // local siren too, thief hears it
             return Result.success()

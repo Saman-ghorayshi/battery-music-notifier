@@ -121,6 +121,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # guard-enroll: capture the owner's face for the guard's verdict
     sub.add_parser("guard-enroll", help="Enroll your face for the intruder guard (runs the webcam ~20 frames).")
 
+    # v2.3: account-level disarm + pass management
+    disarm_p = sub.add_parser("disarm", help="Disarm the whole account from here (asks the disarm pass if one is set).")
+    disarm_p.add_argument("--config", type=Path)
+    pass_p = sub.add_parser("pass", help="Set or change the account disarm pass.")
+    pass_p.add_argument("--config", type=Path)
+
     # disarm: not needed as separate command (Ctrl+C disarms), but add for completeness
     # relay: run as relay server (laptop polls worker, plays alarm on THIEF_ALERT)
     relay = sub.add_parser("relay", help="Run relay listener: polls worker and plays alarm on alert.")
@@ -572,6 +578,62 @@ socket_secret = "{esc(socket_secret)}"
             print("  Is opencv-contrib installed? pip install battery-music-notifier[guard]")
             return 1
         return 0
+
+    # disarm: account-level disarm (asks the pass when one is set)
+    if args.cmd == "disarm":
+        setup_logging(False, cfg.log_file)
+        from .worker_client import WorkerClient
+        import getpass as _gp
+
+        if not cfg.worker_url:
+            print("  [ERROR] No worker_url configured.")
+            return 2
+        worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+        state = worker.poll()
+        if not state.get("ok"):
+            print("  [ERROR] Worker unreachable.")
+            return 1
+        if not state.get("armed", 0):
+            print("  Account is already disarmed.")
+            return 0
+        pass_code = None
+        if state.get("has_pass"):
+            pass_code = _gp.getpass("  Disarm pass: ").strip()
+        r = worker.arm_account(False, pass_code)
+        if r.get("ok"):
+            print("  [OK] Account disarmed. All devices stand down.")
+            return 0
+        print(f"  [ERROR] {r.get('error')} (wrong pass, or too many attempts -- wait a minute)")
+        return 1
+
+    # pass: set or change the account disarm pass
+    if args.cmd == "pass":
+        setup_logging(False, cfg.log_file)
+        from .worker_client import WorkerClient
+        import getpass as _gp
+
+        if not cfg.worker_url:
+            print("  [ERROR] No worker_url configured.")
+            return 2
+        worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+        state = worker.poll()
+        if not state.get("ok"):
+            print("  [ERROR] Worker unreachable (check token).")
+            return 1
+        current = None
+        if state.get("has_pass"):
+            current = _gp.getpass("  Current pass: ").strip()
+        new = _gp.getpass("  New pass (4-64 chars): ").strip()
+        if len(new) < 4:
+            print("  [ERROR] Pass too short (min 4).")
+            return 1
+        r = worker.set_pass_code(new, current)
+        if r.get("ok"):
+            print("  [OK] Disarm pass saved (stored as a hash on the worker only).")
+            print("  Disarming -- from any device -- will now ask for it.")
+            return 0
+        print(f"  [ERROR] {r.get('error')}")
+        return 1
 
     # relay: laptop polls worker for alerts, plays alarm
     if args.cmd == "relay":

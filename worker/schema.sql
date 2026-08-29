@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS users (
   is_banned INTEGER DEFAULT 0,
   is_pro INTEGER DEFAULT 0,
   is_founding INTEGER DEFAULT 0,
+  -- v2.3: account-level armed state + disarm pass (sha256, never plaintext)
+  armed INTEGER DEFAULT 0,
+  armed_by TEXT,
+  disarm_hash TEXT,
   created_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 

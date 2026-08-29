@@ -9,6 +9,7 @@ const REGISTER_RATE_MAX = 10; // registrations per minute per IP
 const ADMIN_LOGIN_MAX = 5; // failed admin logins per minute per IP
 const PAIR_LINK_MAX = 10; // pair-link attempts per minute per IP (6-digit brute shield)
 const THIEF_IP_MAX = 120; // thief alerts per minute per IP (generous; still bounded)
+const PASS_MAX = 5; // disarm-pass attempts per minute per account (brute shield)
 const AUTH_FAIL_LIMIT = 50; // failed bearer lookups per hour per token-hash -> deny
 const MAX_BODY_BYTES = 16384; // reject oversized bodies before parsing
 const ADMIN_SESSION_TTL = 3600; // 1 hour
@@ -339,7 +340,55 @@ async function handlePoll(request, db, user) {
     is_charging: user.is_charging,
     snapshot_id: snap ? snap.snap_id : null,
     snapshot_url: snap ? `/api/snapshot/${snap.snap_id}` : null,
+    // v2.3: account-level armed state, so any device can see/act on it
+    armed: user.armed ? 1 : 0,
+    armed_by: user.armed_by || null,
+    has_pass: !!user.disarm_hash,
   });
+}
+
+// ---- v2.3: account-level arm/disarm + disarm pass ------------------------
+// The pass is the second factor for the dangerous direction: arming is free,
+// disarming (from any device) needs it. Only the sha256 lands in D1.
+
+async function handlePassSetup(request, db, user) {
+  const body = await request.json().catch(() => ({}));
+  const pass = (body.pass_code || "").trim();
+  const current = (body.current_pass_code || "").trim();
+  if (!pass || pass.length < 4 || pass.length > 64) {
+    return json({ ok: false, error: "invalid_pass" }, 400);
+  }
+  if (user.disarm_hash) {
+    if (!current) return json({ ok: false, error: "current_pass_required" }, 401);
+    if (await sha256(current) !== user.disarm_hash) {
+      return json({ ok: false, error: "invalid_pass" }, 401);
+    }
+  }
+  await db.prepare("UPDATE users SET disarm_hash = ? WHERE user_id = ?")
+    .bind(await sha256(pass), user.user_id).run();
+  return json({ ok: true });
+}
+
+async function handleArm(request, db, user, env) {
+  // Brute shield on the pass: 5 attempts/min per account. Arming without a
+  // pass also consumes a slot? No -- only pass-carrying attempts count.
+  const body = await request.json().catch(() => ({}));
+  const wantArmed = body.armed ? 1 : 0;
+  const pass = (body.pass_code || "").trim();
+
+  if (!wantArmed && user.disarm_hash) {
+    if (isRateLimitEnabled(env) && !checkRateLimit("pass:" + user.user_id, PASS_MAX)) {
+      return json({ ok: false, error: "rate_limited" }, 429);
+    }
+    if (!pass) return json({ ok: false, error: "pass_required" }, 401);
+    if (await sha256(pass) !== user.disarm_hash) {
+      return json({ ok: false, error: "invalid_pass" }, 401);
+    }
+  }
+  await db.prepare(
+    "UPDATE users SET armed = ?, armed_by = ?, last_seen = ? WHERE user_id = ?"
+  ).bind(wantArmed, user.device_name || "device", now(), user.user_id).run();
+  return json({ ok: true, armed: wantArmed });
 }
 
 // ---- v2.1: intruder snapshots -------------------------------------------
@@ -900,6 +949,19 @@ export default {
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handleNotifyClear(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    // v2.3 account-level arm/disarm + disarm pass
+    if (path === "/api/pass/setup" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handlePassSetup(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    if (path === "/api/arm" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handleArm(request, db, u, env) : json({ ok: false, error: "unauthorized" }, 401);
     }
     // ---- Admin API ----
     if (path === "/admin/login" && request.method === "POST") return handleAdminLogin(request, db, env);
