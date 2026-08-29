@@ -118,6 +118,9 @@ def _build_parser() -> argparse.ArgumentParser:
     guard.add_argument("-v", "--verbose", action="store_true")
     guard.add_argument("--config", type=Path)
 
+    # guard-enroll: capture the owner's face for the guard's verdict
+    sub.add_parser("guard-enroll", help="Enroll your face for the intruder guard (runs the webcam ~20 frames).")
+
     # disarm: not needed as separate command (Ctrl+C disarms), but add for completeness
     # relay: run as relay server (laptop polls worker, plays alarm on THIEF_ALERT)
     relay = sub.add_parser("relay", help="Run relay listener: polls worker and plays alarm on alert.")
@@ -521,11 +524,40 @@ socket_secret = "{esc(socket_secret)}"
             print("  Run this terminal as administrator, or logon events stay invisible.")
             print(f"  Camera index: {cfg.guard_camera_index} (set guard_camera_index in config.toml to change)")
 
-        g = IntruderGuard(cfg, worker_client=worker)
+        from .face_guard import load_verdict
+        player = None
+        alarm_files = cfg.alarm_files if cfg.alarm_files else cfg.music_files
+        if alarm_files and getattr(cfg, "guard_siren", True):
+            from .player import Player
+            player = Player(alarm_files, cfg.volume, annoying=True)
+
+        g = IntruderGuard(
+            cfg, worker_client=worker, player=player,
+            face_verdict=load_verdict(),
+        )
         try:
             g.arm(verbose=True)
         except KeyboardInterrupt:
-            pass
+            g.disarm()
+        return 0
+
+    # guard-enroll: capture the owner's face for the guard's verdict
+    if args.cmd == "guard-enroll":
+        setup_logging(args.verbose, cfg.log_file)
+        from .face_guard import enroll
+        env = detect_environment()
+        print("=" * 50)
+        print("  Intruder Guard - Face Enrollment")
+        print("=" * 50)
+        print(f"  Camera index: {cfg.guard_camera_index}")
+        print("  Look at the webcam, normal lighting. Exactly one face in frame.")
+        try:
+            enroll(camera_index=cfg.guard_camera_index)
+            print("  Done. 'battery-music guard' now locks + sirens on unknown faces.")
+        except Exception as e:
+            print(f"  [ERROR] Enrollment failed: {e}")
+            print("  Is opencv-contrib installed? pip install battery-music-notifier[guard]")
+            return 1
         return 0
 
     # relay: laptop polls worker for alerts, plays alarm

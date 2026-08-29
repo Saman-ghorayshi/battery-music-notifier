@@ -367,6 +367,44 @@ The laptop-side counterpart to Thief Catcher: if someone tries and fails to sign
 
 **Privacy note:** this photographs whoever is at your laptop. It's meant for catching someone tampering with *your own* machine while you're away — don't use it to spy on people who share your device, and check local expectations/laws before arming it around others.
 
+### Face verdict + auto-lock (v2.2)
+
+With a face model enrolled, the guard decides **intruder vs owner** on every
+failed logon:
+
+1. `battery-music guard-enroll` — looks at your webcam, captures ~20 frames,
+   trains the recognizer, saves the model **locally** (app config dir; the
+   encoding is never uploaded — only the snapshot JPEG goes to the relay).
+2. Guard fires → webcam frame → verdict:
+   - **owner** → stand down silently (you just mistyped your password)
+   - **unknown / no face** → lock the workstation instantly, local siren
+     (auto-stops after 5 min), snapshot + THIEF_ALERT to the relay
+   - a covered webcam counts as *no face* — the system fails toward locking,
+     never toward ignoring
+3. No model enrolled → v2.1 behavior (alert only; nothing locks or sirens).
+   `guard_siren` / `guard_autolock` in config.toml can disable either part.
+
+### Real-time delivery to your phone (v2.2)
+
+Two independent channels, both opt-in:
+
+- **Armed watcher (default):** while the alarm is armed, the Android app's
+  foreground service polls the relay every ~4 s. A THIEF_ALERT raised
+  anywhere on the account (laptop guard, charger pull) lands on the phone
+  as a max-priority notification **with the local siren** and a Silence
+  button. Battery cost only while armed.
+- **Telegram push (app can be fully closed):** create a bot with
+  @BotFather, get your chat id (@userinfobot), then on the laptop:
+  ```
+  python -c "from battery_notifier.worker_client import WorkerClient; \
+  from battery_notifier.config import Config; \
+  c = Config(); w = WorkerClient(c.worker_url, c.worker_token, c); \
+  print(w._post('/api/notify/setup', {'bot_token': 'YOUR_BOT_TOKEN', 'chat_id': 'YOUR_CHAT_ID'}))"
+  ```
+  The relay then DMs **your own bot** on every THIEF_ALERT, attaching the
+  intruder photo. Opt-out anytime with `/api/notify/clear`. Credentials are
+  per-account and never shown in the admin dashboard.
+
 ---
 
 ## Worker Relay (Cloudflare)
@@ -465,6 +503,8 @@ All admin CLI commands check the login return value before proceeding. If login 
 | `/api/poll` | GET | Bearer | Check for alerts (laptop polls this) |
 | `/api/snapshot` | POST | Bearer | Upload intruder snapshot (150 KB cap, R2-backed) |
 | `/api/snapshot/{id}` | GET | Bearer | Fetch a snapshot (own account only) |
+| `/api/notify/setup` | POST | Bearer | Store own bot token + chat id (Telegram push opt-in) |
+| `/api/notify/clear` | POST | Bearer | Remove Telegram push prefs |
 | `/admin` | GET | session | HTML dashboard |
 | `/admin/login` | POST | none | Get admin session |
 | `/admin/stats` | GET | session | JSON stats |

@@ -121,6 +121,10 @@ class Config:
 
     # Intruder guard (v2.1): webcam index used for failed-logon snapshots
     guard_camera_index: int = 0
+    # v2.2 escalations -- only active once a face model is enrolled
+    # (battery-music guard-enroll). No model -> plain alert behavior.
+    guard_siren: bool = True
+    guard_autolock: bool = True
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Config":

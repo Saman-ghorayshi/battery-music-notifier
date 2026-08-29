@@ -453,6 +453,59 @@ def test_alert_carries_snapshot_id():
     _api("/api/clear", "POST", token=token)
 
 
+# ---- v2.2: opt-in Telegram delivery (needs migration_notify.sql) ----
+
+def test_notify_setup_and_clear():
+    """notify prefs store/upsert/clear; the real send is fire-and-forget."""
+    _, reg = _register("notify")
+    token = reg["token"]
+
+    # invalid bot token shape -> 400
+    s, b = _api("/api/notify/setup", "POST", token=token, body={
+        "bot_token": "not-a-token", "chat_id": "12345",
+    })
+    assert s == 400 and b.get("error") == "invalid_bot_token", b
+
+    # valid-shaped creds -> stored (upserted on repeat)
+    good = {"bot_token": "1234567890:AA" + "x" * 33, "chat_id": "123456789"}
+    s, b = _api("/api/notify/setup", "POST", token=token, body=good)
+    assert s == 200 and b.get("ok") is True, b
+    s, b = _api("/api/notify/setup", "POST", token=token, body=good)
+    assert s == 200, b
+
+    # a THIEF_ALERT with prefs set still relays fine even though the dummy
+    # bot token can't actually deliver (send is fire-and-forget)
+    s, b = _api("/api/alert", "POST", token=token, body={
+        "alert_type": "THIEF_ALERT", "battery_pct": -1, "is_charging": False,
+    })
+    assert s == 200 and b.get("ok") is True, b
+    _api("/api/clear", "POST", token=token)
+
+    # opt-out works
+    s, b = _api("/api/notify/clear", "POST", token=token, body={})
+    assert s == 200 and b.get("ok") is True, b
+
+
+def test_real_telegram_delivery():
+    """End-to-end Telegram DM (skipped unless TG_BOT_TOKEN + TG_CHAT_ID set)."""
+    bot = os.environ.get("TG_BOT_TOKEN", "")
+    chat = os.environ.get("TG_CHAT_ID", "")
+    if not bot or not chat:
+        pytest.skip("TG_BOT_TOKEN/TG_CHAT_ID not set -- real-delivery test skipped")
+    _, reg = _register("tg")
+    token = reg["token"]
+    s, b = _api("/api/notify/setup", "POST", token=token, body={
+        "bot_token": bot, "chat_id": chat,
+    })
+    assert s == 200, b
+    s, b = _api("/api/alert", "POST", token=token, body={
+        "alert_type": "THIEF_ALERT", "battery_pct": -1, "is_charging": False,
+    })
+    assert s == 200, b
+    time.sleep(5)  # ctx.waitUntil delivery
+    _api("/api/clear", "POST", token=token)
+
+
 if __name__ == "__main__":
     import sys
     tests = [
@@ -475,6 +528,8 @@ if __name__ == "__main__":
         test_snapshot_validation_gates,
         test_snapshot_retention_keeps_newest_five,
         test_alert_carries_snapshot_id,
+        test_notify_setup_and_clear,
+        test_real_telegram_delivery,
     ]
     passed = failed = 0
     for t in tests:
