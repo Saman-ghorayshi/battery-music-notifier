@@ -13,6 +13,12 @@ const AUTH_FAIL_LIMIT = 50; // failed bearer lookups per hour per token-hash -> 
 const MAX_BODY_BYTES = 16384; // reject oversized bodies before parsing
 const ADMIN_SESSION_TTL = 3600; // 1 hour
 const MAX_EVENTS_PER_USER = 200; // keep event log bounded
+// v2.1 intruder snapshots: the decoded image cap and the JSON-body cap for
+// /api/snapshot only (base64 inflates ~4/3, so the body limit is decoded cap
+// * 4/3 plus slack for the JSON wrapper).
+const SNAPSHOT_MAX_BYTES = 153600; // 150 KB decoded
+const SNAPSHOT_BODY_LIMIT = 212992; // 208 KB of base64-in-JSON
+const MAX_SNAPSHOTS_PER_USER = 5; // older snapshots get pruned on upload
 
 // Self-hosted users can disable rate limiting via env var
 // THIEF_ALERT always bypasses rate limiting regardless of this setting
@@ -266,6 +272,16 @@ async function handleSendAlert(request, db, user, env) {
   ensureDailyStats(db);
   const batteryPct = typeof body.battery_pct === "number" ? body.battery_pct : -1;
   const isCharging = body.is_charging ? 1 : 0;
+  // Optional link to an uploaded intruder snapshot; must belong to this
+  // account or the alert is rejected.
+  let snapshotId = null;
+  if (Number.isInteger(body.snapshot_id) && body.snapshot_id > 0) {
+    const owned = await db.prepare(
+      "SELECT snap_id FROM snapshots WHERE snap_id = ? AND user_id = ?"
+    ).bind(body.snapshot_id, user.user_id).first();
+    if (!owned) return json({ ok: false, error: "unknown_snapshot" }, 400);
+    snapshotId = body.snapshot_id;
+  }
   const t = now();
 
   await db.prepare(
@@ -275,7 +291,7 @@ async function handleSendAlert(request, db, user, env) {
   // Log event (bounded)
   await db.prepare(
     "INSERT INTO events (user_id, event_type, payload, ts) VALUES (?, ?, ?, ?)"
-  ).bind(user.user_id, alertType, JSON.stringify({ battery_pct: batteryPct, charging: isCharging }), t).run();
+  ).bind(user.user_id, alertType, JSON.stringify({ battery_pct: batteryPct, charging: isCharging, snapshot_id: snapshotId }), t).run();
 
   // Trim old events (only if count exceeds limit — avoids heavy subquery on every alert)
   const eventCount = await db.prepare("SELECT COUNT(*) as cnt FROM events WHERE user_id = ?").bind(user.user_id).first();
@@ -292,7 +308,7 @@ async function handleSendAlert(request, db, user, env) {
   // battery_notifier/notifier.py (personal Telegram/email/desktop channels);
   // this worker is a pure relay: store state, hand it back on poll.
 
-  return json({ ok: true, alert_active: 1, alert_type: alertType });
+  return json({ ok: true, alert_active: 1, alert_type: alertType, snapshot_id: snapshotId });
 }
 
 async function handleClearAlert(request, db, user) {
@@ -303,7 +319,11 @@ async function handleClearAlert(request, db, user) {
 }
 
 async function handlePoll(request, db, user) {
-  // User polls their own state (laptop checks if phone sent alert)
+  // User polls their own state (laptop checks if phone sent alert).
+  // Latest snapshot rides along so the poller can pull the photo.
+  const snap = await db.prepare(
+    "SELECT snap_id FROM snapshots WHERE user_id = ? ORDER BY snap_id DESC LIMIT 1"
+  ).bind(user.user_id).first();
   return json({
     ok: true,
     alert_active: user.alert_active,
@@ -311,6 +331,94 @@ async function handlePoll(request, db, user) {
     alert_ts: user.alert_ts,
     battery_pct: user.battery_pct,
     is_charging: user.is_charging,
+    snapshot_id: snap ? snap.snap_id : null,
+    snapshot_url: snap ? `/api/snapshot/${snap.snap_id}` : null,
+  });
+}
+
+// ---- v2.1: intruder snapshots -------------------------------------------
+// Laptop uploads one webcam frame on a failed logon while armed; any device
+// holding the account's token (laptop or paired phone) can fetch it back.
+
+// Look at the leading bytes, not the filename -- anything else would let a
+// client store text/scripts with an image content type.
+function sniffImage(bytes) {
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "image/png";
+  }
+  return null;
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+async function handleSnapshotUpload(request, db, env, user) {
+  if (!env.SNAPSHOTS) return json({ ok: false, error: "snapshots_not_configured" }, 501);
+  // Snapshots are rare by design; a tighter bucket than /api/alert keeps one
+  // token from filling the R2 bucket.
+  if (isRateLimitEnabled(env) && !checkRateLimit("snap:" + user.user_id, 10)) {
+    return json({ ok: false, error: "rate_limited" }, 429);
+  }
+  const body = await request.json().catch(() => ({}));
+  const b64 = typeof body.image === "string" ? body.image : "";
+  if (!b64 || b64.length > SNAPSHOT_BODY_LIMIT) {
+    return json({ ok: false, error: "bad_image" }, 400);
+  }
+  let bytes;
+  try {
+    bytes = base64ToBytes(b64);
+  } catch (_) {
+    return json({ ok: false, error: "bad_image" }, 400);
+  }
+  if (bytes.length === 0 || bytes.length > SNAPSHOT_MAX_BYTES) {
+    return json({ ok: false, error: "bad_image" }, 400);
+  }
+  const contentType = sniffImage(bytes);
+  if (!contentType) return json({ ok: false, error: "unsupported_format" }, 415);
+
+  const t = now();
+  const r2Key = `snap/${user.user_id}/${t}-${randomToken().slice(0, 8)}`;
+  await env.SNAPSHOTS.put(r2Key, bytes, { httpMetadata: { contentType } });
+  const result = await db.prepare(
+    "INSERT INTO snapshots (user_id, r2_key, content_type, bytes, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).bind(user.user_id, r2Key, contentType, bytes.length, t).run();
+
+  // Retention: only the newest MAX_SNAPSHOTS_PER_USER survive; prune the rest
+  // from R2 too so the bucket can't grow behind the D1 trim.
+  const stale = await db.prepare(
+    "SELECT snap_id, r2_key FROM snapshots WHERE user_id = ? ORDER BY snap_id DESC LIMIT -1 OFFSET ?"
+  ).bind(user.user_id, MAX_SNAPSHOTS_PER_USER).all();
+  for (const row of stale.results || []) {
+    try { await env.SNAPSHOTS.delete(row.r2_key); } catch (_) {}
+    await db.prepare("DELETE FROM snapshots WHERE snap_id = ?").bind(row.snap_id).run();
+  }
+
+  return json({ ok: true, snap_id: result.meta.last_row_id, bytes: bytes.length });
+}
+
+async function handleSnapshotFetch(request, db, env, user, snapId) {
+  if (!env.SNAPSHOTS) return json({ ok: false, error: "snapshots_not_configured" }, 501);
+  // Ownership check: a paired phone shares the account, a stranger's token doesn't.
+  const row = await db.prepare(
+    "SELECT r2_key, content_type FROM snapshots WHERE snap_id = ? AND user_id = ?"
+  ).bind(snapId, user.user_id).first();
+  if (!row) return json({ ok: false, error: "not_found" }, 404);
+  const obj = await env.SNAPSHOTS.get(row.r2_key);
+  if (!obj) return json({ ok: false, error: "not_found" }, 404);
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": row.content_type || "application/octet-stream",
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+    },
   });
 }
 
@@ -630,9 +738,11 @@ export default {
     }
 
     // Body-size gate: reject oversized payloads before parsing. We still
-    // drain the bytes so the client's send() completes cleanly.
+    // drain the bytes so the client's send() completes cleanly. Snapshot
+    // uploads carry a base64 webcam frame, so they get their own limit.
     const contentLength = parseInt(request.headers.get("Content-Length") || "0", 10);
-    if (contentLength > MAX_BODY_BYTES) {
+    const bodyLimit = path === "/api/snapshot" ? SNAPSHOT_BODY_LIMIT : MAX_BODY_BYTES;
+    if (contentLength > bodyLimit) {
       try { await request.arrayBuffer(); } catch (_) {}
       return json({ ok: false, error: "payload_too_large" }, 413);
     }
@@ -680,6 +790,22 @@ export default {
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handlePoll(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    // v2.1 intruder snapshots
+    if (path === "/api/snapshot" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handleSnapshotUpload(request, db, env, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    if (path.startsWith("/api/snapshot/") && request.method === "GET") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      if (!u) return json({ ok: false, error: "unauthorized" }, 401);
+      const snapId = parseInt(path.slice("/api/snapshot/".length), 10);
+      if (!snapId) return json({ ok: false, error: "not_found" }, 404);
+      return handleSnapshotFetch(request, db, env, u, snapId);
     }
     // ---- Admin API ----
     if (path === "/admin/login" && request.method === "POST") return handleAdminLogin(request, db, env);

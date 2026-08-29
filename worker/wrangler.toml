@@ -13,3 +13,9 @@ database_id = "633974ee-2bcd-41f6-aaa3-59660c003815"
 RATE_LIMIT_ENABLED = "true"
 
 MAINTENANCE_MODE = "0"
+
+# v2.1 intruder snapshots. Create before first deploy with:
+#   npx wrangler r2 bucket create battery-snapshots
+[[r2_buckets]]
+binding = "SNAPSHOTS"
+bucket_name = "battery-snapshots"

@@ -16,3 +16,9 @@ RATE_LIMIT_ENABLED = "true"
 ENVIRONMENT = "staging"
 
 MAINTENANCE_MODE = "0"
+
+# v2.1 intruder snapshots (staging bucket). Create with:
+#   npx wrangler r2 bucket create battery-snapshots-staging
+[[r2_buckets]]
+binding = "SNAPSHOTS"
+bucket_name = "battery-snapshots-staging"
