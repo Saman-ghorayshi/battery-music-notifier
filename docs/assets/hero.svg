@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="240" viewBox="0 0 880 240" role="img" aria-label="Battery Music Notifier">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#10192b"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#e6edf3"/>
+      <stop offset="0.55" stop-color="#79c0ff"/>
+      <stop offset="1" stop-color="#bc8cff"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0883e"/>
+      <stop offset="1" stop-color="#d29922"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="1" y="1" width="878" height="238" rx="16" fill="url(#bg)" stroke="#30363d" stroke-width="2"/>
+
+  <!-- pulse rings behind the bolt -->
+  <circle cx="96" cy="120" r="34" fill="none" stroke="#f0883e" stroke-width="2" opacity="0.5">
+    <animate attributeName="r" values="30;52;30" dur="2.4s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.55;0.05;0.55" dur="2.4s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="96" cy="120" r="34" fill="none" stroke="#f0883e" stroke-width="2" opacity="0.3">
+    <animate attributeName="r" values="52;30;52" dur="2.4s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.1;0.6;0.1" dur="2.4s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- bolt -->
+  <g>
+    <path d="M104 86 L82 126 L98 126 L88 156 L114 114 L97 114 Z" fill="url(#bolt)">
+      <animate attributeName="opacity" values="1;0.65;1" dur="2.4s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <text x="150" y="106" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="40" font-weight="700" fill="url(#title)">Battery Music Notifier</text>
+  <text x="152" y="140" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="18" fill="#8b949e">thief alarm &#183; intruder lock &#183; instant alerts &#8212; laptop &#8596; phone</text>
+
+  <!-- device strip with animated signal dots -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#8b949e">
+    <!-- laptop -->
+    <rect x="150" y="176" width="86" height="42" rx="6" fill="#161b22" stroke="#30363d"/>
+    <rect x="142" y="218" width="102" height="8" rx="3" fill="#21262d"/>
+    <text x="193" y="244" text-anchor="middle">laptop: guard + siren</text>
+    <!-- phone -->
+    <rect x="400" y="168" width="40" height="62" rx="8" fill="#161b22" stroke="#30363d"/>
+    <text x="420" y="244" text-anchor="middle">phone: thief alarm</text>
+    <!-- telegram -->
+    <circle cx="560" cy="196" r="16" fill="#161b22" stroke="#30363d"/>
+    <path d="M551 196 l17 -7 -5 15 -5 -5 -4 3 z" fill="#58a6ff"/>
+    <text x="560" y="244" text-anchor="middle">telegram push</text>
+    <!-- camera -->
+    <rect x="640" y="182" width="44" height="30" rx="5" fill="#161b22" stroke="#30363d"/>
+    <circle cx="662" cy="197" r="8" fill="none" stroke="#bc8cff" stroke-width="2">
+      <animate attributeName="r" values="8;5;8" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <text x="662" y="244" text-anchor="middle">face verdict</text>
+
+    <!-- traveling dots: laptop -> cloud-ish right edge -->
+    <g fill="#f85149">
+      <circle r="4" cx="250" cy="196">
+        <animate attributeName="cx" values="250;620" dur="3s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.85;1" dur="3s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="4" cx="620" cy="196">
+        <animate attributeName="cx" values="620;250" dur="3s" begin="1.5s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.85;1" dur="3s" begin="1.5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <g fill="#3fb950">
+      <circle r="4" cx="250" cy="196">
+        <animate attributeName="cx" values="250;620" dur="3s" begin="0.75s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.85;1" dur="3s" begin="0.75s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="4" cx="620" cy="196">
+        <animate attributeName="cx" values="620;250" dur="3s" begin="2.25s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.85;1" dur="3s" begin="2.25s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+  </g>
+</svg>

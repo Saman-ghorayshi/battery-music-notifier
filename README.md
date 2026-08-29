@@ -1,6 +1,83 @@
-# Battery Music Notifier
+<p align="center">
+  <img src="docs/assets/hero.svg" alt="Battery Music Notifier" width="880">
+</p>
 
-A cross-platform battery monitor and thief catcher. Works on your phone (Termux) and laptop (Windows/macOS/Linux). Three ways to connect: Cloudflare Worker relay (default, zero config), local socket (USB/Wi-Fi), or Telegram cloud fallback.
+<h1 align="center">Battery Music Notifier</h1>
+
+<p align="center">
+  <b>Your laptop screams when your phone is stolen.<br>
+  Your phone screams when someone touches your laptop.</b>
+</p>
+
+<p align="center">
+  <a href="#-quick-start"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-2ea44f"></a>
+  <a href="https://github.com/Saman-ghorayshi/battery-music-notifier/actions/workflows/test.yml"><img alt="tests" src="https://github.com/Saman-ghorayshi/battery-music-notifier/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/Saman-ghorayshi/battery-music-notifier/actions/workflows/android-build.yml"><img alt="apk" src="https://github.com/Saman-ghorayshi/battery-music-notifier/actions/workflows/android-build.yml/badge.svg"></a>
+  <img alt="backend" src="https://img.shields.io/badge/backend-Cloudflare%20Workers%20%2B%20D1%20%2B%20R2-f0883e">
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/github/license/Saman-ghorayshi/battery-music-notifier"></a>
+</p>
+
+---
+
+## 🎬 See it work
+
+| Thief Catcher (phone) | Intruder Guard (laptop) | Pair in 30 seconds |
+|---|---|---|
+| ![](docs/assets/demo_thief.gif) | ![](docs/assets/demo_intruder.gif) | ![](docs/assets/demo_pair.gif) |
+
+<p align="center">
+  <img src="docs/assets/flow.svg" alt="architecture" width="880">
+</p>
+
+**What actually happens, in one paragraph:** every device joins one relay
+account (6-digit pairing, hashed tokens only). Arm it once, from any device.
+Pull your phone's charger and the phone **and** laptop scream in seconds.
+Type a wrong password on your laptop and the webcam takes one look, compares
+it against your DPAPI-encrypted face model -- **not you = instant lock, siren,
+snapshot**, and your phone shows you the intruder's face. Everything crosses a
+dumb, tiny Cloudflare Worker (D1 + R2 on the free tier), with an opt-in
+Telegram channel that DMs you the photo even when every app is closed.
+Disarming the system from anywhere demands your **disarm pass** (hash-only,
+5 guesses/minute, no backdoor).
+
+## 🚀 Quick start
+
+**Laptop (Windows first-class):**
+```bash
+pip install -e ".[gui,audio]"        # or download the exe from Releases
+battery-music init                   # wizard: sound, relay, disarm pass
+battery-music guard-enroll           # teach it your face (encrypted, local)
+battery-music guard                  # arm the intruder guard (admin terminal)
+```
+
+**Phone (Android):** grab the APK from the latest green
+[android-build](https://github.com/Saman-ghorayshi/battery-music-notifier/actions/workflows/android-build.yml)
+run → install → pair with the 6-digit code from `battery-music pair` →
+follow the **Finish setup** card (notifications, battery, pass).
+Termux user? `curl -sSL <raw>/termux/termux_setup.sh | bash`
+
+**Behind censorship (Iran and friends):** the relay is plain HTTPS to
+Cloudflare and auto-detects v2rayN/Clash/Hiddify proxies. On the phone, use a
+full-device VPN (workers.dev is domain-blocked). [Details](#behind-censorship--vpn-iran-and-friends)
+
+## 🧭 What's inside
+
+| | |
+|---|---|
+| **🔋 Battery Notifier** | phone battery crosses your threshold → laptop plays a sound |
+| **🕵️ Thief Catcher** | charger pulled while armed → both devices scream, even with the app dead |
+| **🚨 Intruder Guard** | failed logon → face verdict → lock + siren + encrypted-upload snapshot |
+| **📱 Native Android app** | Compose + OkHttp + WorkManager, APK from CI, no Play Store |
+| **☁️ Cloud relay** | free-tier Worker + D1 + R2: pairing, alerts, photos, Telegram push |
+| **🔑 Disarm pass** | hash-only, arms free / disarms gated, D1-backed 5/min brute shield |
+| **🛑 Kill switch** | STOP ALARM EVERYWHERE from the phone; guard stands down in ~3 s |
+| **🔒 Privacy-first** | hashed tokens, face model never leaves the laptop, aggregate-only stats |
+
+Deep dive below: platforms · censorship recipes · connection tiers · security
+model · worker API · admin dashboard · thief catcher internals · intruder
+guard setup · the legacy details that made v2.0 solid.
+
+---
 
 ## Platforms
 
@@ -9,8 +86,8 @@ A cross-platform battery monitor and thief catcher. Works on your phone (Termux)
 | **Windows** | full app + GUI + exe | `pip install -e ".[gui,audio]"` or download `battery-music-gui.exe` from Releases |
 | **macOS / Linux** | full CLI + GUI* | `pipx install`; GUI needs pywebview's GTK/Qt/Cocoa deps |
 | **Android (Termux)** | phone-side client + thief catcher | one-liner: `curl -sSL <raw>/termux/termux_setup.sh \| bash` |
-| **Android (native)** | planned v2.1 | Kotlin companion app (Phase 3 in plan.md) |
-| **iPhone** | not supported as an app | iOS kills background apps, so thief catching is impossible without a native build. Partial workaround today: Apple **Shortcuts → Automation** on "Battery Level" can call your relay's `/api/alert` URL. Real support = Swift app, post-v2.1 idea. |
+| **Android (native)** | **shipped v2.3** | Compose APK from CI: pairing, thief alarm, armed watcher, intruder photos, remote arm/disarm |
+| **iPhone** | not supported as an app | iOS kills background apps, so thief catching is impossible without a native build. Partial workaround today: Apple **Shortcuts → Automation** on "Battery Level" can call your relay's `/api/alert` URL. Real support = Swift app, post-v2.3 idea. |
 
 \* mac/Linux GUI bundles are a deliberate v2.0 scope cut; CLI covers everything.
 
@@ -43,6 +120,8 @@ Deploying/maintaining things *from inside* a censored network:
 
 1. **Battery Notifier** -- Phone monitors battery. When it hits your threshold (low or full), the laptop plays a sound.
 2. **Thief Catcher** -- Arm it while charging. If someone unplugs the charger, both the phone and laptop scream immediately.
+3. **Intruder Guard (v2.2)** -- Arm it on the laptop. A failed sign-in gets one webcam look at your face: you = stand down, stranger = instant lock + siren + snapshot on your phone.
+4. **Remote arm/disarm (v2.3)** -- The armed state lives on the relay. Any paired device arms or disarms everything; disarming demands your pass.
 
 ---
 

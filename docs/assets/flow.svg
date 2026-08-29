@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="340" viewBox="0 0 880 340" role="img" aria-label="How the pieces talk">
+  <defs>
+    <linearGradient id="fbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#0f1626"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="878" height="338" rx="16" fill="url(#fbg)" stroke="#30363d" stroke-width="2"/>
+  <text x="440" y="38" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#e6edf3">One account &#183; any device raises the alarm &#183; every device screams</text>
+
+  <!-- phone node -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <rect x="60" y="90" width="180" height="170" rx="12" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <rect x="120" y="80" width="60" height="10" rx="4" fill="#21262d"/>
+    <text x="150" y="130" text-anchor="middle" font-size="16" font-weight="700" fill="#e6edf3">PHONE</text>
+    <text x="150" y="156" text-anchor="middle" font-size="13" fill="#8b949e">charger pull &#8594; alert</text>
+    <text x="150" y="176" text-anchor="middle" font-size="13" fill="#8b949e">armed watcher + siren</text>
+    <text x="150" y="196" text-anchor="middle" font-size="13" fill="#8b949e">intruder photo</text>
+    <text x="150" y="224" text-anchor="middle" font-size="12" fill="#3fb950">works with app dead</text>
+  </g>
+
+  <!-- cloud node -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <ellipse cx="440" cy="120" rx="66" ry="26" fill="#f0883e"/>
+    <ellipse cx="486" cy="132" rx="52" ry="20" fill="#f0883e"/>
+    <ellipse cx="396" cy="132" rx="50" ry="20" fill="#f0883e"/>
+    <text x="440" y="140" text-anchor="middle" font-size="15" font-weight="700" fill="#0d1117">relay</text>
+    <text x="440" y="180" text-anchor="middle" font-size="13" fill="#8b949e">Cloudflare Worker &#183; D1 &#183; R2</text>
+    <text x="440" y="200" text-anchor="middle" font-size="13" fill="#8b949e">armed state &#183; pass &#183; photos</text>
+    <text x="440" y="236" text-anchor="middle" font-size="12" fill="#d29922">6-digit pairing &#183; hashed tokens</text>
+  </g>
+
+  <!-- laptop node -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <rect x="640" y="90" width="180" height="170" rx="12" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <text x="730" y="130" text-anchor="middle" font-size="16" font-weight="700" fill="#e6edf3">LAPTOP</text>
+    <text x="730" y="156" text-anchor="middle" font-size="13" fill="#8b949e">failed logon &#8594; face check</text>
+    <text x="730" y="176" text-anchor="middle" font-size="13" fill="#8b949e">lock + siren + snapshot</text>
+    <text x="730" y="196" text-anchor="middle" font-size="13" fill="#8b949e">relay listener rings</text>
+    <text x="730" y="224" text-anchor="middle" font-size="12" fill="#3fb950">guard + encrypted face model</text>
+  </g>
+
+  <!-- telegram node -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <rect x="370" y="272" width="140" height="44" rx="10" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <path d="M392 294 l24 -10 -7 21 -6 -6 -5 4 z" fill="#58a6ff"/>
+    <text x="460" y="299" text-anchor="middle" font-size="13" fill="#e6edf3">your Telegram</text>
+  </g>
+
+  <!-- alert paths with moving dots -->
+  <path id="p_pc" d="M240 160 C 320 120, 360 130, 372 128" fill="none" stroke="none"/>
+  <path id="p_cl" d="M508 132 C 570 132, 600 140, 640 150" fill="none" stroke="none"/>
+  <path id="p_lc" d="M640 200 C 560 220, 520 230, 510 268" fill="none" stroke="none"/>
+  <path id="p_ct" d="M440 246 L 440 270" fill="none" stroke="none"/>
+
+  <g>
+    <circle r="5" fill="#f85149">
+      <animateMotion dur="2.2s" repeatCount="indefinite"><mpath href="#p_pc"/></animateMotion>
+    </circle>
+    <circle r="5" fill="#f85149">
+      <animateMotion dur="1.8s" begin="1s" repeatCount="indefinite"><mpath href="#p_cl"/></animateMotion>
+    </circle>
+    <circle r="5" fill="#f85149">
+      <animateMotion dur="1.8s" begin="2.2s" repeatCount="indefinite"><mpath href="#p_lc"/></animateMotion>
+    </circle>
+    <circle r="5" fill="#58a6ff">
+      <animateMotion dur="1.4s" begin="0.6s" repeatCount="indefinite"><mpath href="#p_ct"/></animateMotion>
+    </circle>
+    <circle r="5" fill="#bc8cff">
+      <animateMotion dur="2.6s" begin="1.2s" repeatCount="indefinite"><mpath href="#p_lc"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- labels on paths -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#8b949e">
+    <text x="272" y="118" fill="#f85149">THIEF_ALERT</text>
+    <text x="536" y="118" fill="#f85149">wake laptop siren</text>
+    <text x="500" y="256" fill="#f85149">clear = stand down</text>
+    <text x="452" y="264" fill="#58a6ff">photo DM</text>
+  </g>
+
+  <!-- dashed pass shield between phone and laptop actions -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12">
+    <rect x="96" y="286" width="240" height="34" rx="9" fill="#161b22" stroke="#d29922"/>
+    <text x="216" y="308" text-anchor="middle" fill="#d29922">disarm pass &#183; hash-only &#183; 5 tries/min</text>
+    <rect x="546" y="286" width="240" height="34" rx="9" fill="#161b22" stroke="#d29922"/>
+    <text x="666" y="308" text-anchor="middle" fill="#d29922">arm free &#183; disarm needs the pass</text>
+  </g>
+</svg>
