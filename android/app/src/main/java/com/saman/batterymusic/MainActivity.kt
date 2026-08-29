@@ -25,6 +25,32 @@ class MainActivity : ComponentActivity() {
     private val notifPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    /**
+     * OEM battery managers (Xiaomi/Samsung/...) love killing background
+     * polling, which is the whole job of the armed watcher. Send the user to
+     * the battery settings once; sideloaded app, so no Play-policy worry.
+     */
+    private fun askBatteryUnrestrictionOnce() {
+        if (!prefs.hasToken()) return
+        val sp = getSharedPreferences("hints", MODE_PRIVATE)
+        if (sp.getBoolean("battery_prompted", false)) return
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (pm?.isIgnoringBatteryOptimizations(packageName) == true) {
+            sp.edit().putBoolean("battery_prompted", true).apply()
+            return
+        }
+        sp.edit().putBoolean("battery_prompted", true).apply()
+        try {
+            startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS,
+                ),
+            )
+        } catch (_: Exception) {
+            // Some OEMs hide the page; the user can do it manually
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs.get(this)
@@ -32,6 +58,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        askBatteryUnrestrictionOnce()
         // Idempotent (KEEP policy): schedules on first launch, keeps interval after.
         if (prefs.hasToken()) scheduleBatteryWatcher(this)
         setContent {

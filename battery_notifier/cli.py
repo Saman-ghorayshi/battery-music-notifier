@@ -612,6 +612,7 @@ socket_secret = "{esc(socket_secret)}"
 
         player = Player(alarm_files, cfg.volume, annoying=True)
         last_alert_active = False
+        alert_started = 0.0
         consecutive_errors = 0
 
         while True:
@@ -643,9 +644,19 @@ socket_secret = "{esc(socket_secret)}"
                     if alert_active and not last_alert_active:
                         print(f"  [{_time.strftime('%H:%M:%S')}] ALERT: {alert_type} (battery={battery_pct}%, charging={is_charging})")
                         player.play()
+                        alert_started = _time.time()
                         last_alert_active = True
                     elif not alert_active and last_alert_active:
                         print(f"  [{_time.strftime('%H:%M:%S')}] Alert cleared.")
+                        player.stop()
+                        last_alert_active = False
+
+                    # Unattended-laptop safety valve: an alert nobody clears
+                    # (test left running, owner away) must not beep all day.
+                    # The relayed alert state stays active; only the local
+                    # sound auto-stops -- the phone keeps its own siren.
+                    if last_alert_active and _time.time() - alert_started > 300:
+                        print(f"  [{_time.strftime('%H:%M:%S')}] Local siren auto-stopped after 5 min (alert still active).")
                         player.stop()
                         last_alert_active = False
             except KeyboardInterrupt:
