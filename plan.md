@@ -291,6 +291,31 @@ on a call). Merged to master 2026-08-29 after live QA on staging.
   advertising the feature; physical QA on a real phone + elevated `guard`
   run on the laptop still owed (Phase 5 checklist)
 
+## Phase 3.6 — Real-time delivery + face-verified auto-lock (v2.2)  `[x code, x live QA staging]`
+
+Owner ask: "alert the MAIN device, scare the intruder, and lock the laptop
+if the face isn't approved." Built on branch `v2.2-realtime-face`.
+
+- `[x]` face_guard.py: LBPH enroll (`guard-enroll`, ~20 webcam frames) +
+  verdict(owner/unknown/no_face); model lives in APP_DIR, never uploaded;
+  fails toward unknown (covered camera = lock, never ignore)
+- `[x]` guard escalation: owner -> silent stand-down; unknown/no_face ->
+  instant LockWorkStation + local siren (5 min cap) + snapshot + alert;
+  no model -> v2.1 quiet-alert behavior; `guard_siren`/`guard_autolock`
+  config flags
+- `[x]` worker Telegram: `user_notify` table + `/api/notify/setup|clear`
+  (per-account OWN bot token + chat id); THIEF_ALERT -> waitUntil DM with
+  the R2 snapshot attached via sendPhoto; failures never block the relay;
+  admin dashboard never exposes creds
+- `[x]` android: ArmService watches the relay every ~4s while armed ->
+  MAX-priority notification + siren + Silence action (AlertActionReceiver);
+  Telegram covers the app-closed case
+- `[x]` tests: +7 guard tests (camera-independent via mocked frames) --
+  unit suite 137 green; live staging 37 pass + 1 skip (real Telegram send
+  behind TG_BOT_TOKEN/TG_CHAT_ID env -- owner completes with own bot)
+- `[ ]` owner steps: `guard-enroll` with own face, elevated `guard` run,
+  BotFather token -> notify/setup on PROD, prod deploy, real-phone QA
+
 ## Phase 4 — CI/CD, Termux One-Click, Docs  `[*]`
 
 - `[x]` `.github/workflows/test.yml`: pytest matrix 3.9–3.13 × {ubuntu, windows},
