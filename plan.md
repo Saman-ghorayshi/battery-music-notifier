@@ -262,6 +262,27 @@ once keystore secret exists) · upload-artifact the APK · no Play Store ever.
 - Test policy: pure-JVM JUnit for ApiClient JSON parsing + worker input
   validation; instrumentation deferred (manual QA via Phase 5 checklist).
 
+## Phase 3.5 — Intruder Guard (v2.1, laptop side)  `[x code, / live QA]`
+
+Owner-requested after a real incident (friends used the laptop while owner was
+on a call). The v2.0 freeze stays for master; this lives on branch
+`v2.1-intruder-snapshot` until live QA passes.
+
+- `[x]` worker: `POST /api/snapshot` (token auth, 150 KB cap, magic-byte
+  sniff jpeg/png, 10/min per user, newest 5 kept per device with R2+D1
+  pruning) + `GET /api/snapshot/{id}` (owner or paired phone only) +
+  optional `snapshot_id` on `/api/alert`, latest snapshot in `/api/poll`
+- `[x]` laptop: `intruder_guard.py` — Windows Event 4625 watcher via wevtutil
+  (admin required), opencv frame grab (640px JPEG q70), 90 s cooldown +
+  5/hour budget; `battery-music guard` CLI; worker_client snapshot methods
+- `[x]` tests: 13 new unit tests (suite 130 green); opencv stays optional
+  via `[guard]` extra
+- `[ ]` deploy: R2 bucket `battery-snapshots` (+staging), run
+  `migration_snapshots.sql` on both D1s, wrangler deploy, then live QA:
+  failed logon -> snapshot on staging -> photo fetch from paired phone
+- `[ ]` decision after QA: keep as separate guard feature or fold into GUI
+  tray toggle in the Kotlin/GUI phase
+
 ## Phase 4 — CI/CD, Termux One-Click, Docs  `[*]`
 
 - `[x]` `.github/workflows/test.yml`: pytest matrix 3.9–3.13 × {ubuntu, windows},
