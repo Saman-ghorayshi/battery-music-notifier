@@ -34,10 +34,31 @@ COOLDOWN_SECONDS = 90
 HOURLY_BUDGET = 5
 SNAPSHOT_MAX_WIDTH = 640
 JPEG_QUALITY = 70
+# Siren auto-stop: the owner is at the phone by then, and a false positive
+# shouldn't scream all afternoon
+SIREN_MAX_SECONDS = 300
 
 # wevtutil prints UTC, so the parse goes through calendar.timegm to avoid
 # local-timezone surprises on the timestamp comparison.
 _SYSTEM_TIME_RE = re.compile(r'SystemTime="([^"]+)"')
+
+
+def lock_workstation() -> bool:
+    """Windows lock. Belt-and-braces: a failed logon usually means the lock
+    screen is already up; this also covers UAC/unlock prompts."""
+    if os.name != "nt":
+        log.info("autolock: not Windows, skipping")
+        return False
+    try:
+        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.run(
+            ["rundll32.exe", "user32.dll,LockWorkStation"],
+            timeout=5, creationflags=create_no_window, check=False,
+        )
+        return True
+    except Exception as e:
+        log.error("lock_workstation failed: %s", e)
+        return False
 
 
 def last_failed_logon() -> float | None:
@@ -72,15 +93,13 @@ def last_failed_logon() -> float | None:
     return float(calendar.timegm(dt.timetuple()))
 
 
-def grab_snapshot(camera_index: int = 0) -> bytes | None:
-    """One downscaled JPEG frame from the webcam; None if no camera or cv2."""
+def grab_frame(camera_index: int = 0):
+    """One raw BGR frame from the webcam, camera released immediately."""
     try:
         import cv2
     except ImportError:
-        log.warning(
-            "opencv not installed - camera capture disabled. "
-            "Install with: pip install battery-music-notifier[guard]"
-        )
+        log.warning("opencv not installed - camera capture disabled. "
+                    "Install with: pip install battery-music-notifier[guard]")
         return None
     cam = cv2.VideoCapture(camera_index)
     try:
@@ -90,6 +109,12 @@ def grab_snapshot(camera_index: int = 0) -> bytes | None:
     if not ok or frame is None:
         log.warning("Camera %s returned no frame", camera_index)
         return None
+    return frame
+
+
+def snapshot_from_frame(frame) -> bytes | None:
+    """Downscale + JPEG-encode a raw frame for the relay."""
+    import cv2
     h, w = frame.shape[:2]
     if w > SNAPSHOT_MAX_WIDTH:
         scale = SNAPSHOT_MAX_WIDTH / w
@@ -100,12 +125,31 @@ def grab_snapshot(camera_index: int = 0) -> bytes | None:
     return bytes(buf)
 
 
-class IntruderGuard:
-    """Watches for failed logons while armed; one snapshot per intrusion."""
+def grab_snapshot(camera_index: int = 0) -> bytes | None:
+    """One downscaled JPEG frame from the webcam; None if no camera or cv2."""
+    frame = grab_frame(camera_index)
+    if frame is None:
+        return None
+    try:
+        return snapshot_from_frame(frame)
+    except Exception as e:
+        log.error("snapshot encode failed: %s", e)
+        return None
 
-    def __init__(self, config, worker_client=None):
+
+class IntruderGuard:
+    """Watches for failed logons while armed; one snapshot per intrusion.
+
+    With an enrolled face model (v2.2): owner -> stand down silently,
+    unknown/no_face -> lock + siren + snapshot + alert. Without a model the
+    guard keeps the v2.1 behavior: snapshot + alert, no lock, no siren.
+    """
+
+    def __init__(self, config, worker_client=None, player=None, face_verdict=None):
         self.cfg = config
         self.worker = worker_client
+        self.player = player
+        self.face_verdict = face_verdict  # None = no model -> legacy behavior
         self.camera_index = getattr(config, "guard_camera_index", 0) or 0
         self._stop_event = threading.Event()
         self._armed = False
@@ -125,6 +169,11 @@ class IntruderGuard:
         self._armed = True
 
         if verbose:
+            if self.face_verdict:
+                print("  Face check: ON (owner stands down, unknown locks + siren)")
+            else:
+                print("  Face check: OFF (no model -- run 'battery-music guard-enroll')")
+                print("           every failed logon alerts, nothing locks or sirens")
             print("  Intruder Guard ARMED (failed logon -> webcam snapshot -> phone)")
             print("  Press Ctrl+C to disarm.\n")
         while not self._stop_event.is_set():
@@ -144,7 +193,24 @@ class IntruderGuard:
         if not self._should_upload(now):
             log.info("Intrusion detected but suppressed (cooldown/budget)")
             return
-        image = grab_snapshot(self.camera_index)
+
+        verdict = None
+        frame = grab_frame(self.camera_index)
+        if frame is not None and self.face_verdict:
+            try:
+                verdict = self.face_verdict(frame)
+            except Exception as e:
+                log.error("face verdict failed: %s", e)
+                verdict = "unknown"  # fail toward locking, never ignoring
+        if verdict == "owner":
+            log.info("Owner's face at failed logon -- standing down")
+            return
+
+        if verdict in ("unknown", "no_face") and getattr(self.cfg, "guard_autolock", True):
+            if lock_workstation():
+                log.info("Unknown face -- workstation locked")
+
+        image = snapshot_from_frame(frame) if frame is not None else None
         if not image:
             return
         snap_id = self.worker.upload_snapshot(image) if self.worker else None
@@ -153,7 +219,18 @@ class IntruderGuard:
                 alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False,
                 snapshot_id=snap_id,
             )
-        log.info("Intruder snapshot sent (snap_id=%s)", snap_id)
+        log.info("Intruder snapshot sent (snap_id=%s, verdict=%s)", snap_id, verdict)
+
+        # Siren only when the face check is active and disapproved: without a
+        # model every mistyped password would scream (v2.1 compat = quiet).
+        if verdict in ("unknown", "no_face") and getattr(self.cfg, "guard_siren", True) and self.player:
+            self.player.play()
+            threading.Timer(SIREN_MAX_SECONDS, self._siren_timeout).start()
+
+    def _siren_timeout(self) -> None:
+        if self.player:
+            self.player.stop()
+            log.info("Siren auto-stopped after %ss", SIREN_MAX_SECONDS)
 
     def _should_upload(self, ts: float) -> bool:
         if self._uploads and ts - self._uploads[-1] < COOLDOWN_SECONDS:
@@ -172,6 +249,8 @@ class IntruderGuard:
     def disarm(self) -> None:
         """Stop watching. Safe to call from another thread."""
         self._stop_event.set()
+        if self.player:
+            self.player.stop()
 
 
 if __name__ == "__main__":

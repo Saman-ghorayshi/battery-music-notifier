@@ -105,9 +105,10 @@ def test_should_upload_cooldown_and_budget(mock_config):
     assert g._should_upload(t0 + 3700) is True
 
 
-@patch("battery_notifier.intruder_guard.grab_snapshot")
+@patch("battery_notifier.intruder_guard.snapshot_from_frame")
+@patch("battery_notifier.intruder_guard.grab_frame")
 @patch("battery_notifier.intruder_guard.last_failed_logon")
-def test_check_once_uploads_and_alerts(mock_last, mock_grab, mock_config):
+def test_check_once_uploads_and_alerts(mock_last, mock_grab, mock_snap, mock_config):
     """A new failed logon becomes: snapshot -> upload -> THIEF_ALERT with snap id."""
     from battery_notifier.intruder_guard import IntruderGuard
 
@@ -117,7 +118,8 @@ def test_check_once_uploads_and_alerts(mock_last, mock_grab, mock_config):
     g._last_seen_event = 100.0
 
     mock_last.return_value = 200.0
-    mock_grab.return_value = b"\xff\xd8\xfffakejpeg"
+    mock_grab.return_value = "frame"
+    mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
 
     g._check_once()
 
@@ -128,7 +130,7 @@ def test_check_once_uploads_and_alerts(mock_last, mock_grab, mock_config):
     )
 
 
-@patch("battery_notifier.intruder_guard.grab_snapshot")
+@patch("battery_notifier.intruder_guard.grab_frame")
 @patch("battery_notifier.intruder_guard.last_failed_logon")
 def test_check_once_ignores_old_events(mock_last, mock_grab, mock_config):
     """Events at or before the baseline are history, not intrusions."""
@@ -148,7 +150,7 @@ def test_check_once_ignores_old_events(mock_last, mock_grab, mock_config):
     worker.send_alert.assert_not_called()
 
 
-@patch("battery_notifier.intruder_guard.grab_snapshot")
+@patch("battery_notifier.intruder_guard.grab_frame")
 @patch("battery_notifier.intruder_guard.last_failed_logon")
 def test_check_once_survives_camera_failure(mock_last, mock_grab, mock_config):
     """No camera frame -> no alert, and the guard keeps its baseline."""
@@ -243,3 +245,158 @@ def test_send_alert_includes_snapshot_id(mock_requests, mock_config):
     wc.send_alert(alert_type="THIEF_ALERT")
     _, kwargs = mock_requests.post.call_args
     assert "snapshot_id" not in kwargs["json"]
+
+
+# ---------------------------------------------------------------------------
+# v2.2: face verdict drives lock + siren escalation
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_worker():
+    w = MagicMock()
+    w.upload_snapshot.return_value = 7
+    return w
+
+
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_owner_face_stands_down(mock_last, mock_grab, mock_config, mock_worker):
+    """Owner's face -> silent: no lock, no siren, no upload, no alert."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    player = MagicMock()
+    lock = MagicMock()
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=player,
+                      face_verdict=lambda frame: "owner")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = "frame"
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", lock):
+        g._check_once()
+
+    lock.assert_not_called()
+    player.play.assert_not_called()
+    mock_worker.upload_snapshot.assert_not_called()
+    mock_worker.send_alert.assert_not_called()
+
+
+@patch("battery_notifier.intruder_guard.snapshot_from_frame")
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_unknown_face_locks_and_sirens(mock_last, mock_grab, mock_snap, mock_config, mock_worker):
+    """Unknown face -> instant lock + siren + snapshot + alert."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    player = MagicMock()
+    lock = MagicMock(return_value=True)
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=player,
+                      face_verdict=lambda frame: "unknown")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = "frame"
+    mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", lock), \
+         patch("battery_notifier.intruder_guard.threading.Timer") as timer:
+        g._check_once()
+
+    lock.assert_called_once()
+    player.play.assert_called_once()
+    timer.assert_called_once()  # siren auto-stop armed
+    mock_worker.send_alert.assert_called_once_with(
+        alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False, snapshot_id=7,
+    )
+
+
+@patch("battery_notifier.intruder_guard.snapshot_from_frame")
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_no_model_keeps_legacy_quiet_behavior(mock_last, mock_grab, mock_snap, mock_config, mock_worker):
+    """No face model -> v2.1 behavior: alert + snapshot, never lock/siren."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    player = MagicMock()
+    lock = MagicMock()
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=player,
+                      face_verdict=None)
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = "frame"
+    mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", lock):
+        g._check_once()
+
+    lock.assert_not_called()
+    player.play.assert_not_called()
+    mock_worker.upload_snapshot.assert_called_once()
+    mock_worker.send_alert.assert_called_once()
+
+
+@patch("battery_notifier.intruder_guard.snapshot_from_frame")
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_broken_face_check_fails_toward_locking(mock_last, mock_grab, mock_snap, mock_config, mock_worker):
+    """A crashing recognizer must not silently ignore the intrusion."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    lock = MagicMock(return_value=True)
+
+    def boom(frame):
+        raise RuntimeError("model exploded")
+
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=None,
+                      face_verdict=boom)
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = "frame"
+    mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", lock):
+        g._check_once()
+
+    lock.assert_called_once()
+    mock_worker.send_alert.assert_called_once()
+
+
+@patch("battery_notifier.intruder_guard.subprocess")
+@patch("battery_notifier.intruder_guard.os")
+def test_lock_workstation_runs_rundll32(mock_os, mock_subprocess):
+    from battery_notifier.intruder_guard import lock_workstation
+
+    mock_os.name = "nt"
+    mock_subprocess.CREATE_NO_WINDOW = 0
+    assert lock_workstation() is True
+    cmd = mock_subprocess.run.call_args[0][0]
+    assert cmd == ["rundll32.exe", "user32.dll,LockWorkStation"]
+
+
+@patch("battery_notifier.intruder_guard.os")
+def test_lock_workstation_noop_off_windows(mock_os):
+    from battery_notifier.intruder_guard import lock_workstation
+
+    mock_os.name = "posix"
+    assert lock_workstation() is False
+
+
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_no_camera_still_alerts_without_lock(mock_last, mock_grab, mock_config, mock_worker):
+    """Covered/disconnected camera: verdict unknown-ish but no frame -> alert
+    goes out without a snapshot; lock does not fire (no verdict evidence)."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    lock = MagicMock()
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=None,
+                      face_verdict=lambda f: "unknown")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = None
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", lock):
+        g._check_once()
+
+    lock.assert_not_called()
+    mock_worker.upload_snapshot.assert_not_called()
+    mock_worker.send_alert.assert_not_called()  # no image -> nothing to show

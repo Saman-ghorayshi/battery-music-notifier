@@ -250,7 +250,7 @@ async function handlePing(request, db, user) {
   return json({ ok: true, server_time: t });
 }
 
-async function handleSendAlert(request, db, user, env) {
+async function handleSendAlert(request, db, user, env, ctx) {
   const body = await request.json().catch(() => ({}));
   // trim matters: "THIEF_ALERT " with trailing space would otherwise lose
   // its rate-limit bypass and get stored as a different type
@@ -307,6 +307,12 @@ async function handleSendAlert(request, db, user, env) {
   // names at scale. Each client now delivers its own notifications via
   // battery_notifier/notifier.py (personal Telegram/email/desktop channels);
   // this worker is a pure relay: store state, hand it back on poll.
+
+  // Opt-in Telegram DM to the owner's own bot -- only on the critical alert,
+  // only for accounts that set it up, and never blocking the response.
+  if (alertType === "THIEF_ALERT" && ctx) {
+    ctx.waitUntil(sendTelegramNotify(env, db, user, snapshotId));
+  }
 
   return json({ ok: true, alert_active: 1, alert_type: alertType, snapshot_id: snapshotId });
 }
@@ -420,6 +426,81 @@ async function handleSnapshotFetch(request, db, env, user, snapId) {
       "Referrer-Policy": "no-referrer",
     },
   });
+}
+
+// ---- v2.2: per-account opt-in Telegram delivery --------------------------
+// The stored bot token + chat id belong to the account owner themselves;
+// the worker only ever messages that one chat, and only on THIEF_ALERT.
+// Accounts that never call /api/notify/setup keep the pure-relay behavior.
+
+async function handleNotifySetup(request, db, user) {
+  const body = await request.json().catch(() => ({}));
+  const botToken = (body.bot_token || "").trim();
+  const chatId = (body.chat_id || "").trim();
+  // Bot tokens look like 1234567890:AAex...; chat ids numeric or @channelname
+  if (!/^\d{8,12}:[\w-]{30,}$/.test(botToken)) {
+    return json({ ok: false, error: "invalid_bot_token" }, 400);
+  }
+  if (!/^(-?\d{5,20}|@[\w]{4,64})$/.test(chatId)) {
+    return json({ ok: false, error: "invalid_chat_id" }, 400);
+  }
+  await db.prepare(
+    "INSERT INTO user_notify (user_id, bot_token, chat_id, created_at) VALUES (?, ?, ?, ?) " +
+    "ON CONFLICT(user_id) DO UPDATE SET bot_token = excluded.bot_token, chat_id = excluded.chat_id"
+  ).bind(user.user_id, botToken, chatId, now()).run();
+  return json({ ok: true });
+}
+
+async function handleNotifyClear(request, db, user) {
+  await db.prepare("DELETE FROM user_notify WHERE user_id = ?").bind(user.user_id).run();
+  return json({ ok: true });
+}
+
+async function telegramApi(botToken, method, payload) {
+  const isForm = payload instanceof FormData;
+  const resp = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
+    method: "POST",
+    headers: isForm ? undefined : { "Content-Type": "application/json" },
+    body: isForm ? payload : JSON.stringify(payload),
+  });
+  return resp.json().catch(() => ({}));
+}
+
+// Fire-and-forget via ctx.waitUntil: a Telegram outage must never delay or
+// fail the relayed alert.
+async function sendTelegramNotify(env, db, user, snapshotId) {
+  try {
+    const prefs = await db.prepare(
+      "SELECT bot_token, chat_id FROM user_notify WHERE user_id = ?"
+    ).bind(user.user_id).first();
+    if (!prefs) return;
+
+    let sent = null;
+    if (snapshotId && env.SNAPSHOTS) {
+      const row = await db.prepare(
+        "SELECT r2_key FROM snapshots WHERE snap_id = ? AND user_id = ?"
+      ).bind(snapshotId, user.user_id).first();
+      const obj = row ? await env.SNAPSHOTS.get(row.r2_key) : null;
+      if (obj) {
+        const form = new FormData();
+        form.append("chat_id", prefs.chat_id);
+        form.append("caption", `Intruder Guard: ${user.device_name || "laptop"} raised THIEF_ALERT`);
+        form.append("photo", new Blob([await obj.arrayBuffer()],
+          { type: obj.httpMetadata?.contentType || "image/jpeg" }), "intruder.jpg");
+        sent = await telegramApi(prefs.bot_token, "sendPhoto", form);
+      }
+    }
+    if (!sent || !sent.ok) {
+      sent = await telegramApi(prefs.bot_token, "sendMessage", {
+        chat_id: prefs.chat_id,
+        text: `THIEF_ALERT from ${user.device_name || "your device"}` +
+              (snapshotId ? ` (snapshot ${snapshotId})` : ""),
+      });
+    }
+    if (!sent.ok) console.error("telegram notify failed:", sent.description);
+  } catch (e) {
+    console.error("telegram notify error:", e.message);
+  }
 }
 
 // ---- Admin endpoints ----
@@ -777,7 +858,7 @@ export default {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       if (u === "denied") return json({ ok: false, error: "denied" }, 403);
-      return u ? handleSendAlert(request, db, u, env) : json({ ok: false, error: "unauthorized" }, 401);
+      return u ? handleSendAlert(request, db, u, env, ctx) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/clear" && request.method === "POST") {
       const u = await authUser(request, db);
@@ -806,6 +887,19 @@ export default {
       const snapId = parseInt(path.slice("/api/snapshot/".length), 10);
       if (!snapId) return json({ ok: false, error: "not_found" }, 404);
       return handleSnapshotFetch(request, db, env, u, snapId);
+    }
+    // v2.2 opt-in Telegram delivery
+    if (path === "/api/notify/setup" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handleNotifySetup(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    if (path === "/api/notify/clear" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handleNotifyClear(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     // ---- Admin API ----
     if (path === "/admin/login" && request.method === "POST") return handleAdminLogin(request, db, env);

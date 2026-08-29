@@ -32,6 +32,8 @@
             </intent-filter>
         </receiver>
 
+        <receiver android:name=".AlertActionReceiver" android:exported="false" />
+
         <service
             android:name=".ArmService"
             android:exported="false"

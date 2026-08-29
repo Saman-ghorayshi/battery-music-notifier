@@ -78,6 +78,16 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_user ON snapshots(user_id);
 
+-- v2.2: per-account opt-in Telegram delivery. The bot token + chat id are
+-- the account owner's OWN bot; the worker only ever messages that one chat
+-- on THIEF_ALERT. Never exposed through the admin dashboard.
+CREATE TABLE IF NOT EXISTS user_notify (
+  user_id INTEGER PRIMARY KEY,
+  bot_token TEXT NOT NULL,
+  chat_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- ---------------------------------------------------------------------------
 -- MIGRATION (old schema -> v2.0.0): run once with
 --   npx wrangler d1 execute DB --file=migration_v2.sql --remote
