@@ -155,11 +155,13 @@ def sharpest_frame(frames):
 def snapshot_montage(frames) -> bytes | None:
     """Side-by-side burst in ONE image: three moments, one snapshot row.
     Steps JPEG quality down until the worker's 150 KB cap is comfortable."""
-    import cv2
     if not frames:
         return None
     if len(frames) == 1:
+        # fast path must not import cv2: single-frame callers may run
+        # without opencv (and CI does)
         return snapshot_from_frame(frames[0])
+    import cv2
     height = min(f.shape[0] for f in frames)
     resized = []
     for f in frames[:3]:
