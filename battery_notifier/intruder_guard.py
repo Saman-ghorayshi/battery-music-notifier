@@ -62,13 +62,13 @@ def lock_workstation() -> bool:
         return False
 
 
-def last_failed_logon() -> float | None:
-    """Epoch time of the newest failed Windows sign-in, or None."""
+def _wevtutil_newest(event_id: int) -> float | None:
+    """Epoch time of the newest Windows security event with this id, or None."""
     if os.name != "nt":
         return None
     cmd = [
         "wevtutil", "qe", "Security",
-        "/q:*[System[(EventID=4625)]]",
+        f"/q:*[System[(EventID={event_id})]]",
         "/c:1", "/rd:true", "/f:xml",
     ]
     create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -92,6 +92,21 @@ def last_failed_logon() -> float | None:
     except ValueError:
         return None
     return float(calendar.timegm(dt.timetuple()))
+
+
+def last_failed_logon() -> float | None:
+    """Epoch time of the newest failed Windows sign-in, or None."""
+    return _wevtutil_newest(4625)
+
+
+def last_successful_logon() -> float | None:
+    """Epoch time of the newest successful Windows sign-in (incl. unlock).
+
+    The owner's real mute button: typing the correct password is identity
+    proof a thief cannot fake, so the guard stands down the moment a
+    successful logon lands after a trigger.
+    """
+    return _wevtutil_newest(4624)
 
 
 def grab_frame(camera_index: int = 0):
@@ -253,17 +268,23 @@ class IntruderGuard:
         # model every mistyped password would scream (v2.1 compat = quiet).
         if verdict in ("unknown", "no_face") and getattr(self.cfg, "guard_siren", True) and self.player:
             self.player.play()
-            self._siren_with_stand_down()
+            self._siren_with_stand_down(trigger_ts=event_ts)
 
-    def _siren_with_stand_down(self) -> None:
-        """Keep screaming until the 5-min cap OR the owner pulls the plug
-        from another device (phone 'STOP ALARM EVERYWHERE' -> /api/clear,
-        or a remote disarm with the pass). Runs inside the arm() loop; a
-        second intrusion during the siren is already suppressed by the
-        cooldown/budget, so owning the loop is safe."""
+    def _siren_with_stand_down(self, trigger_ts: float | None = None) -> None:
+        """Keep screaming until the 5-min cap OR the owner proves identity:
+        'STOP ALARM EVERYWHERE' from the phone (-> /api/clear), a remote
+        disarm with the pass, or simply typing the correct Windows password
+        (Event 4624 lands after the trigger). Runs inside the arm() loop; a
+        second intrusion during the siren is suppressed by cooldown/budget."""
         deadline = time.time() + SIREN_MAX_SECONDS
         while time.time() < deadline and not self._stop_event.is_set():
             time.sleep(SIREN_POLL_SECONDS)
+            # Owner typed the real password -> identity proven, stop now
+            ok_ts = last_successful_logon()
+            if ok_ts and (trigger_ts is None or ok_ts >= trigger_ts - 2):
+                self.player.stop()
+                log.info("owner authenticated (successful logon) -- stood down")
+                return
             if self.worker is None:
                 continue
             state = self.worker.poll()

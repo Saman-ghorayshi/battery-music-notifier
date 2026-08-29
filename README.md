@@ -2,8 +2,6 @@
   <img src="docs/assets/hero.svg" alt="Battery Music Notifier" width="880">
 </p>
 
-<h1 align="center">Battery Music Notifier</h1>
-
 <p align="center">
   <b>Your laptop screams when your phone is stolen.<br>
   Your phone screams when someone touches your laptop.</b>

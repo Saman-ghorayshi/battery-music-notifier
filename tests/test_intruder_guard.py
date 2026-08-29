@@ -303,6 +303,7 @@ def test_unknown_face_locks_and_sirens(mock_last, mock_grab, mock_snap, mock_con
     mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
 
     with patch("battery_notifier.intruder_guard.lock_workstation", lock), \
+         patch("battery_notifier.intruder_guard.last_successful_logon", lambda: None), \
          patch("battery_notifier.intruder_guard.SIREN_POLL_SECONDS", 0.01):
         g._check_once()
 
@@ -312,6 +313,55 @@ def test_unknown_face_locks_and_sirens(mock_last, mock_grab, mock_snap, mock_con
     mock_worker.send_alert.assert_called_once_with(
         alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False, snapshot_id=7,
     )
+
+
+@patch("battery_notifier.intruder_guard.snapshot_from_frame")
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_owner_logon_stands_down_instantly(mock_last, mock_grab, mock_config, mock_worker):
+    """Typing the correct password after the trigger stops the siren before
+    any relay round-trip -- identity proof a thief cannot fake."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    player = MagicMock()
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=player,
+                      face_verdict=lambda frame: "unknown")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = "frame"
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", MagicMock()), \
+         patch("battery_notifier.intruder_guard.last_successful_logon", lambda: 201.0), \
+         patch("battery_notifier.intruder_guard.SIREN_POLL_SECONDS", 0.01):
+        g._check_once()
+
+    player.play.assert_called_once()
+    player.stop.assert_called_once()  # owner authenticated
+    mock_worker.poll.assert_not_called()  # no need to ask the relay
+
+
+@patch("battery_notifier.intruder_guard.snapshot_from_frame")
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_old_logon_does_not_stand_down(mock_last, mock_grab, mock_config, mock_worker):
+    """A successful logon from BEFORE the trigger is history, not the owner."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    player = MagicMock()
+    mock_worker.poll.return_value = {"ok": True, "alert_active": 0}
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=player,
+                      face_verdict=lambda frame: "unknown")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = "frame"
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", MagicMock()), \
+         patch("battery_notifier.intruder_guard.last_successful_logon", lambda: 50.0), \
+         patch("battery_notifier.intruder_guard.SIREN_POLL_SECONDS", 0.01):
+        g._check_once()
+
+    player.stop.assert_called_once()  # via remote clear, not the old logon
+    assert mock_worker.poll.call_count >= 1
 
 
 @patch("battery_notifier.intruder_guard.snapshot_from_frame")
@@ -332,6 +382,7 @@ def test_siren_survives_transient_poll_errors(mock_last, mock_grab, mock_snap, m
     mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
 
     with patch("battery_notifier.intruder_guard.lock_workstation", MagicMock()), \
+         patch("battery_notifier.intruder_guard.last_successful_logon", lambda: None), \
          patch("battery_notifier.intruder_guard.SIREN_POLL_SECONDS", 0.01):
         g._check_once()
 
