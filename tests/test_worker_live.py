@@ -584,7 +584,7 @@ def test_device_key_disarm_flow():
     tampered signature rejected; replacing a key respects the pass."""
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives import hashes, serialization
     import base64 as b64
 
     def der_to_raw(der):
@@ -593,8 +593,8 @@ def test_device_key_disarm_flow():
 
     priv = ec.generate_private_key(ec.SECP256R1())
     pub_spki = b64.b64encode(priv.public_key().public_bytes(
-        __import__("cryptography").hazmat.primitives.serialization.Encoding.DER,
-        __import__("cryptography").hazmat.primitives.serialization.PublicFormat.SubjectPublicKeyInfo,
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
     )).decode()
 
     _, reg = _register("key")

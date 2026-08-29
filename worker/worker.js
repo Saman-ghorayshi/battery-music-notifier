@@ -593,13 +593,6 @@ async function sendTelegramNotify(env, db, user, snapshotId) {
 
 const CHALLENGE_TTL = 120;
 
-function base64ToBytes(b) {
-  const bin = atob(b);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
 async function verifyDisarmSignature(pubB64, challengeHex, sigB64) {
   try {
     const key = await crypto.subtle.importKey(
