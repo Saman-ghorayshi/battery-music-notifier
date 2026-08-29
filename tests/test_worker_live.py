@@ -306,6 +306,153 @@ def test_404_on_unknown_path():
     assert b.get("error") == "not_found"
 
 
+# ---- v2.1: intruder snapshots (needs R2 binding + migration_snapshots.sql) ----
+
+import base64
+
+
+def _jpeg(n_kb=2):
+    """Smallest thing the magic-byte sniffer accepts as a real JPEG."""
+    return bytes([0xFF, 0xD8, 0xFF, 0xE0]) + b"\x00" * (n_kb * 1024 - 4)
+
+
+def _post_raw(path, token, payload, timeout=15):
+    """Raw POST that returns (status, bytes) -- snapshot fetches are binary."""
+    url = f"{WORKER_URL}{path}"
+    # Plain-urllib's default UA gets 403'd by Cloudflare (error 1010) before
+    # the request ever reaches the worker -- match _api's honest UA.
+    headers = {"Content-Type": "application/json", "User-Agent": "python-integration-test/2.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def _get_raw(path, token, timeout=15):
+    url = f"{WORKER_URL}{path}"
+    headers = {"User-Agent": "python-integration-test/2.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def test_snapshot_roundtrip_with_paired_phone():
+    """laptop uploads -> poll exposes it -> paired phone fetches the bytes."""
+    _, laptop = _register("snap")
+    token = laptop["token"]
+
+    s, b = _api("/api/snapshot", "POST", token=token, body={
+        "image": base64.b64encode(_jpeg()).decode(),
+    })
+    assert s == 200, b
+    snap_id = b["snap_id"]
+    assert snap_id > 0
+
+    # poll rides the snapshot along
+    s, b = _api("/api/poll", "GET", token=token)
+    assert s == 200
+    assert b["snapshot_id"] == snap_id
+    assert b["snapshot_url"] == f"/api/snapshot/{snap_id}"
+
+    # the paired phone (linked token) may fetch it
+    s, b = _api("/api/pair/generate", "POST", token=token)
+    code = b["code"]
+    s, phone = _api("/api/pair/link", "POST", body={"code": code})
+    assert s == 200, phone
+    s, raw = _get_raw(f"/api/snapshot/{snap_id}", phone["token"])
+    assert s == 200
+    assert raw[:3] == bytes([0xFF, 0xD8, 0xFF]), "not a JPEG back"
+
+    # a stranger's token must NOT reach the laptop's photo
+    _, stranger = _register("snap-stranger")
+    s, _raw = _get_raw(f"/api/snapshot/{snap_id}", stranger["token"])
+    assert s == 404
+
+
+def test_snapshot_validation_gates():
+    """garbage images and oversize payloads are rejected cleanly."""
+    _, reg = _register("snap-gate")
+    token = reg["token"]
+
+    # text pretending to be an image -> 415
+    s, b = _api("/api/snapshot", "POST", token=token, body={
+        "image": base64.b64encode(b"definitely not an image").decode(),
+    })
+    assert s == 415, b
+
+    # broken base64 -> 400
+    s, b = _api("/api/snapshot", "POST", token=token, body={"image": "not!!base64"})
+    assert s == 400, b
+
+    # over the 208 KB body gate -> 413
+    s, b = _post_raw("/api/snapshot", token,
+                     json.dumps({"image": "A" * 220_000}).encode())
+    assert s == 413, b
+
+
+def test_snapshot_retention_keeps_newest_five():
+    """the 6th upload prunes the 1st from both D1 and R2."""
+    _, reg = _register("snap-prune")
+    token = reg["token"]
+
+    ids = []
+    for i in range(6):
+        s, b = _api("/api/snapshot", "POST", token=token, body={
+            "image": base64.b64encode(_jpeg(1)).decode(),
+        })
+        assert s == 200, b
+        ids.append(b["snap_id"])
+        time.sleep(1.1)  # unique per-second R2 keys
+
+    s, b = _api("/api/poll", "GET", token=token)
+    assert b["snapshot_id"] == ids[-1]
+
+    # newest survives...
+    s, _raw = _get_raw(f"/api/snapshot/{ids[-1]}", token)
+    assert s == 200
+    # ...oldest is gone from both the row and the bucket
+    s, b = _get_raw(f"/api/snapshot/{ids[0]}", token)
+    assert s == 404
+
+
+def test_alert_carries_snapshot_id():
+    """THIEF_ALERT links to the uploaded snapshot; unknown ids are rejected."""
+    _, reg = _register("snap-alert")
+    token = reg["token"]
+
+    s, b = _api("/api/snapshot", "POST", token=token, body={
+        "image": base64.b64encode(_jpeg()).decode(),
+    })
+    snap_id = b["snap_id"]
+
+    s, b = _api("/api/alert", "POST", token=token, body={
+        "alert_type": "THIEF_ALERT", "battery_pct": -1,
+        "is_charging": False, "snapshot_id": snap_id,
+    })
+    assert s == 200, b
+    assert b["snapshot_id"] == snap_id
+
+    # someone else's snapshot id must not ride our alert
+    _, other = _register("snap-alert-2")
+    s, b = _api("/api/alert", "POST", token=token, body={
+        "alert_type": "THIEF_ALERT", "battery_pct": -1,
+        "is_charging": False, "snapshot_id": other["user_id"],
+    })
+    assert s == 400 and b.get("error") == "unknown_snapshot", b
+
+    # clean up the alert state this test leaves behind
+    _api("/api/clear", "POST", token=token)
+
+
 if __name__ == "__main__":
     import sys
     tests = [
@@ -324,6 +471,10 @@ if __name__ == "__main__":
         test_thief_alert_bypasses_rate_limit,
         test_admin_stats_has_daily_array,
         test_404_on_unknown_path,
+        test_snapshot_roundtrip_with_paired_phone,
+        test_snapshot_validation_gates,
+        test_snapshot_retention_keeps_newest_five,
+        test_alert_carries_snapshot_id,
     ]
     passed = failed = 0
     for t in tests:

@@ -58,7 +58,13 @@ def test_oversize_body_rejected():
 
 
 def test_pair_link_brute_shield():
-    """14 wrong codes from one IP must trip the 10/min pair-link cap."""
+    """14 wrong codes from one IP must trip the 10/min pair-link cap.
+
+    Needs a stable egress IP: the counter is per (CF-Connecting-IP, minute).
+    Through a rotating VPN/proxy pool every request arrives from a fresh IP
+    and legitimately never trips -- verified live 2026-08-29, pair_fails rows
+    showed per-IP counters of 1 from two 31.171.100/101.x IPs in one window.
+    """
     saw429 = False
     for i in range(14):
         code = str(300000 + i * 13)  # wrong codes, valid format
