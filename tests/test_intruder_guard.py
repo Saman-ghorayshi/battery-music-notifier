@@ -153,7 +153,8 @@ def test_check_once_ignores_old_events(mock_last, mock_grab, mock_config):
 @patch("battery_notifier.intruder_guard.grab_frame")
 @patch("battery_notifier.intruder_guard.last_failed_logon")
 def test_check_once_survives_camera_failure(mock_last, mock_grab, mock_config):
-    """No camera frame -> no alert, and the guard keeps its baseline."""
+    """No camera frame: the alert still goes out (photo-less), and the
+    guard keeps its baseline so the same event never re-fires."""
     from battery_notifier.intruder_guard import IntruderGuard
 
     worker = MagicMock()
@@ -165,7 +166,9 @@ def test_check_once_survives_camera_failure(mock_last, mock_grab, mock_config):
 
     g._check_once()
     worker.upload_snapshot.assert_not_called()
-    worker.send_alert.assert_not_called()
+    worker.send_alert.assert_called_once_with(
+        alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False, snapshot_id=None,
+    )
     assert g._last_seen_event == 200.0
 
 
@@ -382,9 +385,9 @@ def test_lock_workstation_noop_off_windows(mock_os):
 
 @patch("battery_notifier.intruder_guard.grab_frame")
 @patch("battery_notifier.intruder_guard.last_failed_logon")
-def test_no_camera_still_alerts_without_lock(mock_last, mock_grab, mock_config, mock_worker):
-    """Covered/disconnected camera: verdict unknown-ish but no frame -> alert
-    goes out without a snapshot; lock does not fire (no verdict evidence)."""
+def test_no_camera_still_alerts_without_photo(mock_last, mock_grab, mock_config, mock_worker):
+    """Covered/disconnected camera: no snapshot is possible, but the
+    intrusion alert still goes out -- silence would be the worse failure."""
     from battery_notifier.intruder_guard import IntruderGuard
 
     lock = MagicMock()
@@ -397,6 +400,8 @@ def test_no_camera_still_alerts_without_lock(mock_last, mock_grab, mock_config, 
     with patch("battery_notifier.intruder_guard.lock_workstation", lock):
         g._check_once()
 
-    lock.assert_not_called()
+    lock.assert_not_called()  # no frame -> no verdict evidence
     mock_worker.upload_snapshot.assert_not_called()
-    mock_worker.send_alert.assert_not_called()  # no image -> nothing to show
+    mock_worker.send_alert.assert_called_once_with(
+        alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False, snapshot_id=None,
+    )

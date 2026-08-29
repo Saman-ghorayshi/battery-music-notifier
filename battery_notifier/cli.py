@@ -544,16 +544,29 @@ socket_secret = "{esc(socket_secret)}"
     # guard-enroll: capture the owner's face for the guard's verdict
     if args.cmd == "guard-enroll":
         setup_logging(args.verbose, cfg.log_file)
-        from .face_guard import enroll
+        from .face_guard import diagnose_camera, enroll, open_camera_privacy_settings
+
         env = detect_environment()
         print("=" * 50)
         print("  Intruder Guard - Face Enrollment")
         print("=" * 50)
         print(f"  Camera index: {cfg.guard_camera_index}")
-        print("  Look at the webcam, normal lighting. Exactly one face in frame.")
+
+        ok, detail = diagnose_camera(cfg.guard_camera_index)
+        if not ok:
+            print("\n  [ERROR] Camera problem detected:")
+            print("  " + detail.replace("\n", "\n  "))
+            if "privacy" in detail and open_camera_privacy_settings():
+                print("\n  (Opened Windows camera privacy settings for you --")
+                print("   turn 'Let desktop apps access your camera' ON, then rerun)")
+            return 1
+        print("  Camera check: OK")
+        print("  Sit at the laptop in normal lighting. Exactly one face in frame.")
         try:
             enroll(camera_index=cfg.guard_camera_index)
             print("  Done. 'battery-music guard' now locks + sirens on unknown faces.")
+            print("  After a big look change (beard, haircut), run this again --")
+            print("  your old samples are kept, the model learns both looks.")
         except Exception as e:
             print(f"  [ERROR] Enrollment failed: {e}")
             print("  Is opencv-contrib installed? pip install battery-music-notifier[guard]")

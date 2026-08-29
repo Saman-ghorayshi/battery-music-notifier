@@ -174,6 +174,14 @@ class IntruderGuard:
             else:
                 print("  Face check: OFF (no model -- run 'battery-music guard-enroll')")
                 print("           every failed logon alerts, nothing locks or sirens")
+            try:
+                from .face_guard import diagnose_camera
+                cam_ok, cam_detail = diagnose_camera(self.camera_index)
+                if not cam_ok:
+                    print("  [WARN] Camera: " + cam_detail.splitlines()[0])
+                    print("         run 'battery-music guard-enroll' for the guided fix")
+            except Exception:
+                pass
             print("  Intruder Guard ARMED (failed logon -> webcam snapshot -> phone)")
             print("  Press Ctrl+C to disarm.\n")
         while not self._stop_event.is_set():
@@ -210,16 +218,17 @@ class IntruderGuard:
             if lock_workstation():
                 log.info("Unknown face -- workstation locked")
 
+        # No camera evidence changes the alert, not whether we send it:
+        # an intrusion without a photo still rings the phone.
         image = snapshot_from_frame(frame) if frame is not None else None
-        if not image:
-            return
-        snap_id = self.worker.upload_snapshot(image) if self.worker else None
+        snap_id = self.worker.upload_snapshot(image) if (self.worker and image) else None
         if self.worker:
             self.worker.send_alert(
                 alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False,
                 snapshot_id=snap_id,
             )
-        log.info("Intruder snapshot sent (snap_id=%s, verdict=%s)", snap_id, verdict)
+        log.info("Intruder alert sent (snap_id=%s, verdict=%s, photo=%s)",
+                 snap_id, verdict, image is not None)
 
         # Siren only when the face check is active and disapproved: without a
         # model every mistyped password would scream (v2.1 compat = quiet).
