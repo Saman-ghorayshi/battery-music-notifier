@@ -256,10 +256,11 @@ class IntruderGuard:
             self._siren_with_stand_down()
 
     def _siren_with_stand_down(self) -> None:
-        """Keep screaming until the 5-min cap OR the owner clears the alert
-        from another device (phone 'Stop alarm everywhere' -> /api/clear).
-        Runs inside the arm() loop; a second intrusion during the siren is
-        already suppressed by the cooldown/budget, so owning the loop is safe."""
+        """Keep screaming until the 5-min cap OR the owner pulls the plug
+        from another device (phone 'STOP ALARM EVERYWHERE' -> /api/clear,
+        or a remote disarm with the pass). Runs inside the arm() loop; a
+        second intrusion during the siren is already suppressed by the
+        cooldown/budget, so owning the loop is safe."""
         deadline = time.time() + SIREN_MAX_SECONDS
         while time.time() < deadline and not self._stop_event.is_set():
             time.sleep(SIREN_POLL_SECONDS)
@@ -268,9 +269,14 @@ class IntruderGuard:
             state = self.worker.poll()
             if state and not state.get("ok", True):
                 continue  # transient poll error: keep going
-            if state is not None and not state.get("alert_active", 0):
+            if state is None:
+                continue
+            cleared = not state.get("alert_active", 0)
+            disarmed = not state.get("armed", 0)
+            if cleared or disarmed:
                 self.player.stop()
-                log.info("Alert cleared remotely -- siren stood down")
+                why = "alert cleared" if cleared else "account disarmed"
+                log.info("remote %s -- siren stood down", why)
                 return
         self.player.stop()
         log.info("Siren auto-stopped after %ss", SIREN_MAX_SECONDS)

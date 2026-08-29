@@ -652,7 +652,7 @@ socket_secret = "{esc(socket_secret)}"
         print("=" * 50)
         print(f"  Environment: {env.platform_name}")
         print(f"  Worker: {cfg.worker_url}")
-        print(f"  Polling every 2s for alerts...")
+        print(f"  Polling every {cfg.poll_interval}s for alerts...")
         print("  Press Ctrl+C to stop.\n")
 
         worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)

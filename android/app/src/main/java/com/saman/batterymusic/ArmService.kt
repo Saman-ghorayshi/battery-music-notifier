@@ -43,6 +43,16 @@ class ArmService : Service() {
         thread(name = "relay-watch") {
             while (watching && prefs.armed) {
                 val state = try { prefs.newClient().poll() } catch (_: Exception) { null }
+                if (state != null && !state.armed) {
+                    // Account disarmed remotely while the app was closed:
+                    // the watcher's job is over, shut the service down.
+                    watching = false
+                    silence()
+                    Notifications.cancelThiefAlert(this@ArmService)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    break
+                }
                 if (state != null && state.alertActive && state.alertType == "THIEF_ALERT") {
                     if (!ringing) {
                         ringing = true

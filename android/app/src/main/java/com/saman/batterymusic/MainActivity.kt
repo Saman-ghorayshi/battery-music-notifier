@@ -65,7 +65,12 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface {
                     if (paired) DashScreen(prefs, onUnpaired = { paired = false })
-                    else PairScreen(prefs, onPaired = { paired = true })
+                    else PairScreen(prefs, onPaired = {
+                        // First pairing happens after onCreate: schedule the
+                        // battery watcher right now, not on next app start.
+                        scheduleBatteryWatcher(this)
+                        paired = true
+                    })
                 }
             }
         }

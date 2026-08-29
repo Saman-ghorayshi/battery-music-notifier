@@ -60,13 +60,15 @@ fun DashScreen(prefs: Prefs, onUnpaired: () -> Unit) {
         }
     }
 
-    // Keep the local watcher lifecycle in sync with the account flag
+    // Keep the local watcher lifecycle in sync with the account flag.
+    // Keyed on the armed value itself: this body runs on transitions only,
+    // not on every 5-second poll (start/stop spam would churn the OS).
     LaunchedEffect(state?.armed) {
         val s = state ?: return@LaunchedEffect
         prefs.armed = s.armed
-        if (s.armed && !ArmService.ringing) {
+        if (s.armed) {
             context.startForegroundService(Intent(context, ArmService::class.java))
-        } else if (!s.armed) {
+        } else {
             context.startService(
                 Intent(context, ArmService::class.java).setAction(ArmService.ACTION_DISARM),
             )
@@ -112,6 +114,7 @@ fun DashScreen(prefs: Prefs, onUnpaired: () -> Unit) {
                                         prefs.newClient().clearAlert()
                                     }
                                     ArmService.silence()
+                                    Notifications.cancelThiefAlert(context)
                                     status = if (cleared.ok) "Alarm stopped everywhere."
                                              else "Clear failed: ${cleared.error}"
                                 }
@@ -243,7 +246,9 @@ fun SetupChecklist(prefs: Prefs, state: PollState?, onUpdate: (String) -> Unit) 
     val notifGranted = androidx.core.content.ContextCompat.checkSelfPermission(
         context, android.Manifest.permission.POST_NOTIFICATIONS,
     ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    val batteryOk = remember {
+    // Recomputed on every poll-driven recomposition: flipping the real
+    // system setting must refresh this card without an app restart.
+    val batteryOk: Boolean = run {
         val pm = context.getSystemService(android.os.PowerManager::class.java)
         pm?.isIgnoringBatteryOptimizations(context.packageName) == true
     }
