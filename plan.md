@@ -262,11 +262,10 @@ once keystore secret exists) · upload-artifact the APK · no Play Store ever.
 - Test policy: pure-JVM JUnit for ApiClient JSON parsing + worker input
   validation; instrumentation deferred (manual QA via Phase 5 checklist).
 
-## Phase 3.5 — Intruder Guard (v2.1, laptop side)  `[x code, / live QA]`
+## Phase 3.5 — Intruder Guard (v2.1, laptop side)  `[x code, x live QA staging]`
 
 Owner-requested after a real incident (friends used the laptop while owner was
-on a call). The v2.0 freeze stays for master; this lives on branch
-`v2.1-intruder-snapshot` until live QA passes.
+on a call). Merged to master 2026-08-29 after live QA on staging.
 
 - `[x]` worker: `POST /api/snapshot` (token auth, 150 KB cap, magic-byte
   sniff jpeg/png, 10/min per user, newest 5 kept per device with R2+D1
@@ -277,11 +276,20 @@ on a call). The v2.0 freeze stays for master; this lives on branch
   5/hour budget; `battery-music guard` CLI; worker_client snapshot methods
 - `[x]` tests: 13 new unit tests (suite 130 green); opencv stays optional
   via `[guard]` extra
-- `[ ]` deploy: R2 bucket `battery-snapshots` (+staging), run
-  `migration_snapshots.sql` on both D1s, wrangler deploy, then live QA:
-  failed logon -> snapshot on staging -> photo fetch from paired phone
-- `[ ]` decision after QA: keep as separate guard feature or fold into GUI
-  tray toggle in the Kotlin/GUI phase
+- `[x]` deploy staging: R2 `battery-snapshots-staging` + migration +
+  wrangler deploy (2026-08-29); ADMIN_KEY rotated same day (old one had
+  leaked via plan.md — new key in %USERPROFILE%\battery-staging-admin-key.txt)
+- `[x]` live QA staging: 39/40 live tests green incl. snapshot
+  roundtrip/validation/retention/alert-link; the one red is the pair brute
+  shield, which cannot trip through the owner's rotating-VPN egress
+  (documented in test_worker_security.py — env artifact, not a bug)
+- `[x]` two-side flow (PhoneSim = real ApiClient.kt on JVM vs staging):
+  phone pair -> test alert -> relay rang -> cleared; laptop alert -> phone
+  RING -> fetched snapshot (jpeg verified). Kotlin app itself builds on CI
+  (android-build.yml green, APK artifact + 7 JVM ApiClient tests).
+- `[ ]` prod deploy (same recipe, `battery-snapshots` bucket) before
+  advertising the feature; physical QA on a real phone + elevated `guard`
+  run on the laptop still owed (Phase 5 checklist)
 
 ## Phase 4 — CI/CD, Termux One-Click, Docs  `[*]`
 
