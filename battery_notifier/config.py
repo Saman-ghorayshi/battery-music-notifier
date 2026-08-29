@@ -119,6 +119,9 @@ class Config:
     # Local socket shared secret (optional, prevents LAN attackers from sending STOP)
     socket_secret: str = ""
 
+    # Intruder guard (v2.1): webcam index used for failed-logon snapshots
+    guard_camera_index: int = 0
+
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Config":
         cfg = cls()

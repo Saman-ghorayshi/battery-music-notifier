@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import os
 import sys
 import logging
 import re
@@ -111,6 +112,11 @@ def _build_parser() -> argparse.ArgumentParser:
     arm.add_argument("--port", type=int, default=8000, help="Local socket port for fallback")
     arm.add_argument("-v", "--verbose", action="store_true")
     arm.add_argument("--config", type=Path)
+
+    # guard: intruder guard — webcam snapshot on failed Windows logon
+    guard = sub.add_parser("guard", help="Arm intruder guard: webcam snapshot on failed sign-in (Windows, needs admin).")
+    guard.add_argument("-v", "--verbose", action="store_true")
+    guard.add_argument("--config", type=Path)
 
     # disarm: not needed as separate command (Ctrl+C disarms), but add for completeness
     # relay: run as relay server (laptop polls worker, plays alarm on THIEF_ALERT)
@@ -478,6 +484,48 @@ socket_secret = "{esc(socket_secret)}"
             print("  Press Ctrl+C to disarm.\n")
 
         tc.arm(mode=args.mode, verbose=True, force=args.force)
+        return 0
+
+    # guard: intruder guard — snapshot on failed logon, alert to the phone
+    if args.cmd == "guard":
+        setup_logging(args.verbose, cfg.log_file)
+        from .intruder_guard import IntruderGuard
+        from .worker_client import WorkerClient
+
+        env = detect_environment()
+        print("=" * 50)
+        print("  Intruder Guard - Armed Mode")
+        print("=" * 50)
+        print(f"  Environment: {env.platform_name}")
+
+        worker = None
+        if cfg.worker_url:
+            worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+            if not cfg.worker_token:
+                print("  No worker token in config. Registering...")
+                token = worker.register(device_name=env.platform_name, platform=env.platform_name)
+                if token:
+                    print(f"  Registered! Token: {token[:8]}... (saved to config)")
+                    cfg.worker_token = token
+                    _save_worker_token(token)
+                else:
+                    print("  [WARN] Registration failed. Snapshots won't reach the relay.")
+                    worker = None
+        else:
+            print("  [WARN] No worker_url configured. Run 'battery-music init' first.")
+
+        if os.name != "nt":
+            print("  [WARN] Failed-logon detection reads the Windows Security log;")
+            print("         on this OS the guard has nothing to watch.")
+        else:
+            print("  Run this terminal as administrator, or logon events stay invisible.")
+            print(f"  Camera index: {cfg.guard_camera_index} (set guard_camera_index in config.toml to change)")
+
+        g = IntruderGuard(cfg, worker_client=worker)
+        try:
+            g.arm(verbose=True)
+        except KeyboardInterrupt:
+            pass
         return 0
 
     # relay: laptop polls worker for alerts, plays alarm

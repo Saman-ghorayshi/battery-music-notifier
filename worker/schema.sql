@@ -66,6 +66,18 @@ CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen);
 CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_codes(expires_at);
 CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id);
 
+-- v2.1: intruder snapshots. Bodies live in R2 (SNAPSHOTS binding); D1 keeps
+-- only the metadata row. Worker prunes to the newest MAX_SNAPSHOTS_PER_USER.
+CREATE TABLE IF NOT EXISTS snapshots (
+  snap_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  r2_key TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_user ON snapshots(user_id);
+
 -- ---------------------------------------------------------------------------
 -- MIGRATION (old schema -> v2.0.0): run once with
 --   npx wrangler d1 execute DB --file=migration_v2.sql --remote

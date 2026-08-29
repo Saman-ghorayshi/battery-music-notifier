@@ -343,6 +343,32 @@ The bundled default alarm is a 2-second siren beep (880/1100Hz alternating). You
 
 ---
 
+## Intruder Guard (v2.1, experimental)
+
+The laptop-side counterpart to Thief Catcher: if someone tries and fails to sign in to your Windows account while the guard is armed, it grabs one webcam frame, uploads it through the relay, and fires THIEF_ALERT — so your paired phone rings and can pull the photo.
+
+**Setup:**
+1. Install the camera extra: `pip install -e ".[guard]"` (opencv-python-headless)
+2. On the worker side (v2.1 deploy only): create the R2 bucket and run the migration
+   ```
+   npx wrangler r2 bucket create battery-snapshots
+   npx wrangler d1 execute DB --file=worker/migration_snapshots.sql --remote
+   ```
+3. Arm it from an **administrator** terminal: `battery-music guard`
+
+**How it works:**
+1. Watches the Windows Security log for Event 4625 (failed sign-in) every 5s
+2. A new event after arming -> one webcam frame, downscaled to 640px JPEG (~30-60 KB)
+3. `POST /api/snapshot` (token auth, 150 KB cap, magic-byte checked, newest 5 kept per device)
+4. `THIEF_ALERT` carries the `snapshot_id`; `/api/poll` returns `snapshot_id`/`snapshot_url`
+5. Any device on the account fetches the photo with `GET /api/snapshot/{id}`
+
+**Guardrails:** 90 s cooldown and max 5 uploads/hour, so hammering the lock screen can't fill the bucket. Without admin rights, a camera, or opencv the guard degrades to watch-only and logs why. Snapshots are only readable by the account's own tokens — there is no public URL.
+
+**Privacy note:** this photographs whoever is at your laptop. It's meant for catching someone tampering with *your own* machine while you're away — don't use it to spy on people who share your device, and check local expectations/laws before arming it around others.
+
+---
+
 ## Worker Relay (Cloudflare)
 
 ### Hosted (for non-technical users)
@@ -437,6 +463,8 @@ All admin CLI commands check the login return value before proceeding. If login 
 | `/api/alert` | POST | Bearer | Send alert (THIEF_ALERT bypasses rate limit) |
 | `/api/clear` | POST | Bearer | Clear alert |
 | `/api/poll` | GET | Bearer | Check for alerts (laptop polls this) |
+| `/api/snapshot` | POST | Bearer | Upload intruder snapshot (150 KB cap, R2-backed) |
+| `/api/snapshot/{id}` | GET | Bearer | Fetch a snapshot (own account only) |
 | `/admin` | GET | session | HTML dashboard |
 | `/admin/login` | POST | none | Get admin session |
 | `/admin/stats` | GET | session | JSON stats |
