@@ -78,6 +78,29 @@ fun DashScreen(prefs: Prefs, onUnpaired: () -> Unit) {
                     if (s.batteryPct >= 0) {
                         Text("Battery: ${s.batteryPct}%${if (s.isCharging) " (charging)" else ""}")
                     }
+                    if (s.alertActive) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val cleared = withContext(Dispatchers.IO) {
+                                        prefs.newClient().clearAlert()
+                                    }
+                                    ArmService.silence() // stop the phone's own siren too
+                                    status = if (cleared.ok) "Alarm stopped everywhere."
+                                             else "Clear failed: ${cleared.error}"
+                                }
+                            },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("STOP ALARM EVERYWHERE") }
+                        Text(
+                            "Stops the laptop siren too (guard listens for your clear).",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     if (s.snapshotId != null && photo == null) {
                         Spacer(Modifier.height(8.dp))
                         OutlinedButton(onClick = {

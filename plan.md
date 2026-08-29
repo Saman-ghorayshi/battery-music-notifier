@@ -316,6 +316,22 @@ if the face isn't approved." Built on branch `v2.2-realtime-face`.
 - `[ ]` owner steps: `guard-enroll` with own face, elevated `guard` run,
   BotFather token -> notify/setup on PROD, prod deploy, real-phone QA
 
+## Phase 3.7 — Cross-device kill switch (v2.2.3)  `[x]`
+
+- `[x]` guard siren listens while it plays: owner clears from the phone ->
+  guard stops within ~3 s (transient poll errors don't stand it down);
+  5-min cap unchanged
+- `[x]` phone DashScreen "STOP ALARM EVERYWHERE" (in-app only): clears the
+  relay account state + silences the phone; lock-screen Silence stays
+  local-only on purpose (thief with a locked phone can't clear the system)
+- `[x]` tests: remote stand-down + transient-error resilience (34 guard
+  suite green)
+- `[ ]` v2.3 DESIGN (not built): remote arm/disarm -- `users.armed INTEGER
+  DEFAULT 0` + `armed_by TEXT` on the worker, `POST /api/arm|/api/disarm`
+  (Bearer), `armed` flag rides on /api/poll, both UIs get account-level arm
+  switches, last-write-wins with the arming device's name shown; the phone's
+  PowerReceiver then keys off the account flag instead of local prefs.
+
 ## Phase 4 — CI/CD, Termux One-Click, Docs  `[*]`
 
 - `[x]` `.github/workflows/test.yml`: pytest matrix 3.9–3.13 × {ubuntu, windows},

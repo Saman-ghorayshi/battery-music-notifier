@@ -288,11 +288,13 @@ def test_owner_face_stands_down(mock_last, mock_grab, mock_config, mock_worker):
 @patch("battery_notifier.intruder_guard.grab_frame")
 @patch("battery_notifier.intruder_guard.last_failed_logon")
 def test_unknown_face_locks_and_sirens(mock_last, mock_grab, mock_snap, mock_config, mock_worker):
-    """Unknown face -> instant lock + siren + snapshot + alert."""
+    """Unknown face -> instant lock + siren; stands down when the owner
+    clears the alert from the phone (worker poll shows alert cleared)."""
     from battery_notifier.intruder_guard import IntruderGuard
 
     player = MagicMock()
     lock = MagicMock(return_value=True)
+    mock_worker.poll.return_value = {"ok": True, "alert_active": 0}  # cleared remotely
     g = IntruderGuard(mock_config, worker_client=mock_worker, player=player,
                       face_verdict=lambda frame: "unknown")
     g._last_seen_event = 100.0
@@ -301,15 +303,40 @@ def test_unknown_face_locks_and_sirens(mock_last, mock_grab, mock_snap, mock_con
     mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
 
     with patch("battery_notifier.intruder_guard.lock_workstation", lock), \
-         patch("battery_notifier.intruder_guard.threading.Timer") as timer:
+         patch("battery_notifier.intruder_guard.SIREN_POLL_SECONDS", 0.01):
         g._check_once()
 
     lock.assert_called_once()
     player.play.assert_called_once()
-    timer.assert_called_once()  # siren auto-stop armed
+    player.stop.assert_called_once()  # remote stand-down
     mock_worker.send_alert.assert_called_once_with(
         alert_type="THIEF_ALERT", battery_pct=-1, is_charging=False, snapshot_id=7,
     )
+
+
+@patch("battery_notifier.intruder_guard.snapshot_from_frame")
+@patch("battery_notifier.intruder_guard.grab_frame")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_siren_survives_transient_poll_errors(mock_last, mock_grab, mock_snap, mock_config, mock_worker):
+    """A failed poll during the siren must not stand down early."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    player = MagicMock()
+    mock_worker.poll.side_effect = [{"ok": False, "error": "timeout"},
+                                    {"ok": True, "alert_active": 0}]
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=player,
+                      face_verdict=lambda frame: "unknown")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+    mock_grab.return_value = "frame"
+    mock_snap.return_value = b"\xff\xd8\xfffakejpeg"
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", MagicMock()), \
+         patch("battery_notifier.intruder_guard.SIREN_POLL_SECONDS", 0.01):
+        g._check_once()
+
+    assert mock_worker.poll.call_count == 2  # first error ignored, second cleared
+    player.stop.assert_called_once()
 
 
 @patch("battery_notifier.intruder_guard.snapshot_from_frame")

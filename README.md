@@ -384,9 +384,7 @@ failed logon:
 3. No model enrolled → v2.1 behavior (alert only; nothing locks or sirens).
    `guard_siren` / `guard_autolock` in config.toml can disable either part.
 
-### Real-time delivery to your phone (v2.2)
-
-Two independent channels, both opt-in:
+### Real-time delivery to your phone (v2.2)Two independent channels, both opt-in:
 
 - **Armed watcher (default):** while the alarm is armed, the Android app's
   foreground service polls the relay every ~4 s. A THIEF_ALERT raised
@@ -404,6 +402,19 @@ Two independent channels, both opt-in:
   The relay then DMs **your own bot** on every THIEF_ALERT, attaching the
   intruder photo. Opt-out anytime with `/api/notify/clear`. Credentials are
   per-account and never shown in the admin dashboard.
+
+### Who can silence what (v2.2.3)
+
+| Action | Stops | Who can do it |
+|---|---|---|
+| Phone lock-screen **Silence** | the phone's own siren only | anyone holding the phone -- by design, a thief with your locked phone cannot clear the whole system |
+| Phone **STOP ALARM EVERYWHERE** (in app) | clears the relay account state: laptop relay stops instantly, guard siren stands down within ~3 s, phone siren stops | only someone with the phone unlocked, inside the app |
+| Laptop `Ctrl+C` on relay/guard | that listener and its sound | whoever is at the unlocked laptop |
+| Automatic caps | any local siren stops itself after 5 min | nobody -- safety valve |
+
+Cross-device symmetry: **either** device can be the victim (phone: charger
+pull; laptop: failed logon) and **either** can rescue the other -- both
+raise THIEF_ALERT through the same relay account and both listen for it.
 
 ---
 
