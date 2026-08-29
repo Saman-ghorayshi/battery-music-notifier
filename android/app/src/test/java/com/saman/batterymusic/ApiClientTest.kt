@@ -192,3 +192,65 @@ class ArmApiTest {
         server.shutdown()
     }
 }
+
+// ---------------------------------------------------------------------------
+// v2.4: device disarm key
+// ---------------------------------------------------------------------------
+
+class DisarmKeyTest {
+
+    private fun client(server: MockWebServer): ApiClient =
+        ApiClient(server.url("/").toString(), "device-token-123456")
+
+    @Test
+    fun setDisarmKey_sends_public_key() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+        server.start()
+        val r = client(server).setDisarmKey("SPKIBASE64KEY")
+        assertTrue(r.ok)
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals("SPKIBASE64KEY", body.getString("public_key"))
+        assertFalse(body.has("pass_code"))
+        server.shutdown()
+    }
+
+    @Test
+    fun armChallenge_parses_challenge() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":true,"challenge":"ab12","expires_in":120}"""))
+        server.start()
+        assertEquals("ab12", client(server).armChallenge())
+        server.shutdown()
+    }
+
+    @Test
+    fun armAccount_with_keySig_sends_it() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"ok":true,"armed":0}"""))
+        server.start()
+        val r = client(server).armAccount(false, keySig = "RAWSIGBASE64")
+        assertTrue(r.ok)
+        val body = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals("RAWSIGBASE64", body.getString("key_sig"))
+        assertFalse(body.has("pass_code"))
+        server.shutdown()
+    }
+
+    @Test
+    fun poll_parses_has_key() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"alert_active":0,"alert_type":"","battery_pct":50,
+                    "is_charging":0,"snapshot_id":null,"armed":0,
+                    "has_pass":true,"has_key":false}"""
+            )
+        )
+        server.start()
+        val state = client(server).poll()!!
+        assertTrue(state.hasPass)
+        assertFalse(state.hasKey)
+        server.shutdown()
+    }
+}

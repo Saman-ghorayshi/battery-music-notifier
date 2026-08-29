@@ -20,6 +20,7 @@ data class PollState(
     val armed: Boolean = false,
     val armedBy: String? = null,
     val hasPass: Boolean = false,
+    val hasKey: Boolean = false,
 )
 
 /**
@@ -108,6 +109,7 @@ class ApiClient(private val workerUrl: String, private var token: String) {
                     armed = body.optInt("armed", 0) == 1,
                     armedBy = if (body.isNull("armed_by")) null else body.optString("armed_by"),
                     hasPass = body.optBoolean("has_pass", false),
+                    hasKey = body.optBoolean("has_key", false),
                 )
             }
         } catch (e: Exception) {
@@ -137,10 +139,34 @@ class ApiClient(private val workerUrl: String, private var token: String) {
     }
 
     /** Arm the account freely; disarming needs the pass when one is set. */
-    fun armAccount(armed: Boolean, passCode: String? = null): ApiResult {
+    fun armAccount(armed: Boolean, passCode: String? = null, keySig: String? = null): ApiResult {
         val body = JSONObject().put("armed", armed)
         if (passCode != null) body.put("pass_code", passCode)
+        if (keySig != null) body.put("key_sig", keySig)
         val resp = post("/api/arm", body)
         return ApiResult(resp.optBoolean("ok"), resp.optString("error", "").ifEmpty { null })
+    }
+
+    /** Upload the device's SPKI public key for biometric disarm. */
+    fun setDisarmKey(publicKeyB64: String, passCode: String? = null): ApiResult {
+        val body = JSONObject().put("public_key", publicKeyB64)
+        if (passCode != null) body.put("pass_code", passCode)
+        val resp = post("/api/key/setup", body)
+        return ApiResult(resp.optBoolean("ok"), resp.optString("error", "").ifEmpty { null })
+    }
+
+    /** Fresh one-time challenge for the device-key disarm signature. */
+    fun armChallenge(): String? {
+        val resp = get("/api/arm/challenge")
+        return try {
+            resp.use { r ->
+                if (!r.isSuccessful) null
+                else JSONObject(r.body?.string() ?: return null)
+                    .optString("challenge")
+                    .ifEmpty { null }
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 }

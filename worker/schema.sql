@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS users (
   armed INTEGER DEFAULT 0,
   armed_by TEXT,
   disarm_hash TEXT,
+  -- v2.4: device disarm key (base64 SPKI EC P-256 public key)
+  disarm_pubkey TEXT,
   created_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
@@ -61,6 +63,13 @@ CREATE TABLE IF NOT EXISTS daily_stats (
   pairings INTEGER DEFAULT 0,
   active_devices INTEGER DEFAULT -1,
   computed INTEGER DEFAULT 0
+);
+
+-- v2.4: one live disarm-key challenge per account (120s TTL)
+CREATE TABLE IF NOT EXISTS arm_challenges (
+  user_id INTEGER PRIMARY KEY,
+  challenge TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
 );
 
 -- Indexes for fast lookups

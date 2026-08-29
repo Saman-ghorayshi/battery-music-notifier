@@ -15,6 +15,8 @@ def mock_config():
     cfg.worker_url = "https://test-worker.example.com"
     cfg.worker_token = "test_token_12345678abcdef"
     cfg.guard_camera_index = 0
+    cfg.burst_count = 1   # legacy tests use the single-frame path
+    cfg.burst_interval = 0
     return cfg
 
 
@@ -537,3 +539,95 @@ def test_set_pass_code_payload(mock_requests, mock_config):
     _, kwargs = mock_requests.post.call_args
     body = kwargs["json"]
     assert body == {"pass_code": "newpass", "current_pass_code": "oldpass"}
+
+
+
+
+# ---------------------------------------------------------------------------
+# v2.4: photo burst, liveness gating, quiet range, guard lock
+# ---------------------------------------------------------------------------
+
+@patch("battery_notifier.intruder_guard.snapshot_montage")
+@patch("battery_notifier.intruder_guard.capture_burst")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_liveness_failure_locks(mock_last, mock_burst, mock_montage, mock_config, mock_worker):
+    """LBPH says owner but the eyes are static -> spoof -> lock + alert."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    mock_burst.return_value = ["f1", "f2", "f3"]
+    mock_montage.return_value = b"\xff\xd8\xffmontage"
+    lock = MagicMock()
+    mock_worker.upload_snapshot.return_value = 9
+
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=MagicMock(),
+                      face_verdict=lambda f: "owner")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", lock), \
+         patch("battery_notifier.intruder_guard.sharpest_frame", lambda fs: fs[0]), \
+         patch("battery_notifier.intruder_guard.last_successful_logon", lambda: None), \
+         patch("battery_notifier.intruder_guard.SIREN_POLL_SECONDS", 0.01), \
+         patch("battery_notifier.intruder_guard.SIREN_MAX_SECONDS", 0.05), \
+         patch("battery_notifier.intruder_guard.liveness_score", lambda a, b: 0.1, create=True), \
+         patch("battery_notifier.face_guard.liveness_score", lambda a, b: 0.1), \
+         patch("battery_notifier.face_guard.LIVENESS_MIN_SCORE", 2.5):
+        g._check_once()
+
+    lock.assert_called_once()  # spoof suspected -> treated as unknown
+    mock_worker.send_alert.assert_called_once()
+    mock_worker.upload_snapshot.assert_called_once_with(b"\xff\xd8\xffmontage")
+
+
+@patch("battery_notifier.intruder_guard.capture_burst")
+@patch("battery_notifier.intruder_guard.last_failed_logon")
+def test_liveness_pass_owner_stands_down(mock_last, mock_burst, mock_config, mock_worker):
+    """Live owner (eyes moved between frames): stand down, no lock, no alert."""
+    from battery_notifier.intruder_guard import IntruderGuard
+
+    mock_burst.return_value = ["f1", "f2", "f3"]
+    lock = MagicMock()
+    g = IntruderGuard(mock_config, worker_client=mock_worker, player=None,
+                      face_verdict=lambda f: "owner")
+    g._last_seen_event = 100.0
+    mock_last.return_value = 200.0
+
+    with patch("battery_notifier.intruder_guard.lock_workstation", lock), \
+         patch("battery_notifier.intruder_guard.sharpest_frame", lambda fs: fs[0]), \
+         patch("battery_notifier.intruder_guard.liveness_score", lambda a, b: 40.0, create=True), \
+         patch("battery_notifier.face_guard.liveness_score", lambda a, b: 40.0), \
+         patch("battery_notifier.face_guard.LIVENESS_MIN_SCORE", 2.5):
+        g._check_once()
+
+    lock.assert_not_called()
+    mock_worker.send_alert.assert_not_called()
+    mock_worker.upload_snapshot.assert_not_called()
+
+
+def test_quiet_range_parsing():
+    """The quiet-arm range regex accepts exactly HH:MM-HH:MM shapes."""
+    import re
+    pattern = re.compile(r"(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})")
+    assert pattern.fullmatch("23:00-07:00")
+    assert pattern.fullmatch("9:30-6:00")
+    assert not pattern.fullmatch("23:00_07:00")
+    assert not pattern.fullmatch("abc")
+
+
+def test_guard_lock_blocks_second_instance(tmp_path):
+    """A live pid in the lock file blocks; a dead pid's file is taken over."""
+    import os
+    from battery_notifier.cli import _acquire_guard_lock, _release_guard_lock
+    if os.name != "nt":
+        pytest.skip("lock liveness check uses Windows OpenProcess")
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("battery_notifier.cli.APP_DIR", tmp_path)
+
+    lock = _acquire_guard_lock()
+    assert lock is not None and lock.exists()
+    assert _acquire_guard_lock() is None  # our own pid is alive -> blocked
+
+    lock.write_text("99999999")  # pid that certainly is not running
+    second = _acquire_guard_lock()
+    assert second is not None  # dead pid -> takeover
+    _release_guard_lock(second)

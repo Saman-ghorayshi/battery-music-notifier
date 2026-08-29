@@ -577,6 +577,96 @@ def test_disarm_pass_rate_limit():
     assert any(s == 429 and err == "rate_limited" for s, err in codes), codes
 
 
+# ---- v2.4: device disarm key (needs cryptography lib + migration_key.sql) ----
+
+def test_device_key_disarm_flow():
+    """Real EC key: enroll -> challenge -> signed disarm accepted;
+    tampered signature rejected; replacing a key respects the pass."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    from cryptography.hazmat.primitives import hashes
+    import base64 as b64
+
+    def der_to_raw(der):
+        r, s = decode_dss_signature(der)
+        return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+    priv = ec.generate_private_key(ec.SECP256R1())
+    pub_spki = b64.b64encode(priv.public_key().public_bytes(
+        __import__("cryptography").hazmat.primitives.serialization.Encoding.DER,
+        __import__("cryptography").hazmat.primitives.serialization.PublicFormat.SubjectPublicKeyInfo,
+    )).decode()
+
+    _, reg = _register("key")
+    token = reg["token"]
+
+    s, b = _api("/api/key/setup", "POST", token=token, body={"public_key": pub_spki})
+    assert s == 200, b
+    s, b = _api("/api/poll", "GET", token=token)
+    assert b["has_key"] is True
+
+    # arm, then disarm with a signed challenge
+    s, b = _api("/api/arm", "POST", token=token, body={"armed": True})
+    assert s == 200, b
+    s, b = _api("/api/arm/challenge", "GET", token=token)
+    assert s == 200 and b.get("challenge"), b
+    challenge = bytes.fromhex(b["challenge"])
+    sig = b64.b64encode(der_to_raw(priv.sign(challenge, ec.ECDSA(hashes.SHA256())))).decode()
+
+    s, b = _api("/api/arm", "POST", token=token,
+                body={"armed": False, "key_sig": sig})
+    assert s == 200 and b["armed"] == 0, b
+
+    # challenge is single-use: a replay must fail
+    s, b = _api("/api/arm", "POST", token=token,
+                body={"armed": False, "key_sig": sig})
+    assert s == 401 and b["error"] == "challenge_required", b
+
+    # a tampered signature over a fresh challenge must fail
+    s, b = _api("/api/arm/challenge", "GET", token=token)
+    challenge = bytes.fromhex(b["challenge"])
+    bad = bytearray(b64.b64decode(sig)); bad[5] ^= 0xFF
+    s, b = _api("/api/arm", "POST", token=token,
+                body={"armed": False, "key_sig": b64.b64encode(bytes(bad)).decode()})
+    assert s == 401 and b["error"] == "invalid_sig", b
+    # re-arm for cleanliness
+    _api("/api/arm", "POST", token=token, body={"armed": False, "pass_code": ""})
+
+
+def test_key_replace_requires_pass_when_pass_set():
+    """A thief with the phone token can't silently swap the disarm key."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization
+    import base64 as b64
+
+    def spki(priv):
+        return b64.b64encode(priv.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+
+    _, reg = _register("keyswap")
+    token = reg["token"]
+    s, b = _api("/api/key/setup", "POST", token=token,
+                body={"public_key": spki(ec.generate_private_key(ec.SECP256R1()))})
+    assert s == 200, b
+    s, b = _api("/api/pass/setup", "POST", token=token, body={"pass_code": "swap-pass-1"})
+    assert s == 200, b
+
+    # swap without pass -> refused
+    s, b = _api("/api/key/setup", "POST", token=token,
+                body={"public_key": spki(ec.generate_private_key(ec.SECP256R1()))})
+    assert s == 401 and b["error"] == "pass_required", b
+    # swap with wrong pass -> refused
+    s, b = _api("/api/key/setup", "POST", token=token,
+                body={"public_key": spki(ec.generate_private_key(ec.SECP256R1())),
+                      "pass_code": "wrong"})
+    assert s == 401 and b["error"] == "invalid_pass", b
+    # with the pass -> allowed
+    s, b = _api("/api/key/setup", "POST", token=token,
+                body={"public_key": spki(ec.generate_private_key(ec.SECP256R1())),
+                      "pass_code": "swap-pass-1"})
+    assert s == 200, b
+
+
 if __name__ == "__main__":
     import sys
     tests = [
@@ -603,6 +693,8 @@ if __name__ == "__main__":
         test_real_telegram_delivery,
         test_arm_disarm_with_pass,
         test_disarm_pass_rate_limit,
+        test_device_key_disarm_flow,
+        test_key_replace_requires_pass_when_pass_set,
     ]
     passed = failed = 0
     for t in tests:

@@ -352,6 +352,31 @@ if the face isn't approved." Built on branch `v2.2-realtime-face`.
 - `[ ]` owner: choose the real pass on prod after deploy; fresh bot token
   for real Telegram setup
 
+## Phase 3.9 — v2.4: autostart, burst, liveness, key disarm, quiet-hours, domain  `[x code, / live]`
+
+- `[x]` guard autostart: `guard-autostart` creates schtasks ONLOGON /RL
+  HIGHEST running pythonw `guard --minimized` (all output -> guard.log);
+  single-instance lockfile (pid liveness via OpenProcess)
+- `[x]` photo burst: `burst_count` (3) x `burst_interval` (1.5s); sharpest
+  frame (Laplacian var) drives the face verdict; frames ship as ONE
+  montage, quality steps down to fit the 150 KB cap
+- `[x]` liveness: eye-band mean-absdiff across burst frames gates the
+  OWNER stand-down (static -> spoof suspected -> lock); burst off = check
+  off (documented)
+- `[x]` device disarm key: AndroidKeyStore EC P-256 (fingerprint-gated,
+  auth-per-use) + BiometricPrompt CryptoObject; DER->raw conversion;
+  worker `/api/key/setup` (replace needs pass) + `/api/arm/challenge`
+  (120 s, single-use) + WebCrypto ECDSA verify in `/api/arm`; shared pass
+  remains a full alternative (either accepted)
+- `[x]` quiet-hours: `quiet-arm HH:MM-HH:MM [--auto-disarm]` -> scheduled
+  tasks BatteryMusicQuietArm-Start/End; auto-disarm pass DPAPI-encrypted
+  (QAP1 file); arm is free so auto-arm needs no secret
+- `[x]` `battery-music domain <name>`: saves battery-relay.<name> worker_url,
+  health-checks, prints the Cloudflare custom-domain steps (placeholder
+  until the owner buys the domain)
+- `[ ]` live QA staging (migration_key + deploy + key-flow live tests),
+  phone QA: fingerprint disarm on a real device
+
 ## Phase 4 — CI/CD, Termux One-Click, Docs  `[*]`
 
 - `[x]` `.github/workflows/test.yml`: pytest matrix 3.9–3.13 × {ubuntu, windows},

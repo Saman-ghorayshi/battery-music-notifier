@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import os
+import subprocess
 import sys
 import logging
 import re
@@ -116,10 +117,34 @@ def _build_parser() -> argparse.ArgumentParser:
     # guard: intruder guard — webcam snapshot on failed Windows logon
     guard = sub.add_parser("guard", help="Arm intruder guard: webcam snapshot on failed sign-in (Windows, needs admin).")
     guard.add_argument("-v", "--verbose", action="store_true")
+    guard.add_argument("--minimized", action="store_true",
+                       help="Quiet mode for autostart: log to file, no console chatter")
     guard.add_argument("--config", type=Path)
 
     # guard-enroll: capture the owner's face for the guard's verdict
     sub.add_parser("guard-enroll", help="Enroll your face for the intruder guard (runs the webcam ~20 frames).")
+
+    # v2.4: autostart the guard at logon (Task Scheduler, elevated)
+    autostart = sub.add_parser("guard-autostart", help="Auto-run the intruder guard at every logon (Windows Task Scheduler).")
+    autostart.add_argument("--remove", action="store_true", help="Delete the logon task instead.")
+    autostart.add_argument("--config", type=Path)
+
+    # v2.4: quiet-hours auto-arm (e.g. 23:00-07:00)
+    quiet = sub.add_parser("quiet-arm", help='Auto-arm nightly, e.g. quiet-arm 23:00-07:00')
+    quiet.add_argument("time_range", nargs="?", help="HH:MM-HH:MM")
+    quiet.add_argument("--remove", action="store_true", help="Delete the quiet-arm tasks instead.")
+    quiet.add_argument("--auto-disarm", action="store_true", help="Also disarm at the end time (pass stored encrypted).")
+    quiet.add_argument("--config", type=Path)
+
+    # v2.4: point the relay at your own domain
+    dom = sub.add_parser("domain", help="Point the relay at your own domain (e.g. example.com -> battery-relay.example.com).")
+    dom.add_argument("name", help="Your registered domain")
+    dom.add_argument("--config", type=Path)
+
+    # quiet-arm-run: invoked BY the scheduled task, never by humans
+    qrun = sub.add_parser("quiet-arm-run", help=argparse.SUPPRESS)
+    qrun.add_argument("mode", choices=["start", "end"])
+    qrun.add_argument("--config", type=Path)
 
     # v2.3: account-level disarm + pass management
     disarm_p = sub.add_parser("disarm", help="Disarm the whole account from here (asks the disarm pass if one is set).")
@@ -497,15 +522,35 @@ socket_secret = "{esc(socket_secret)}"
 
     # guard: intruder guard — snapshot on failed logon, alert to the phone
     if args.cmd == "guard":
+        # --minimized (autostart): everything to the log file, nothing fun on
+        # screen; runs under pythonw so there is no console window at all.
+        # pythonw has sys.stdout=None -- print() would crash -- so both
+        # streams get the log file and prints become log lines.
+        if args.minimized:
+            args.verbose = False
+            if not cfg.log_file:
+                cfg.log_file = APP_DIR / "guard.log"
+            os.makedirs(cfg.log_file.parent, exist_ok=True)
+            sys.stdout = sys.stderr = open(cfg.log_file, "a", encoding="utf-8", buffering=1)
         setup_logging(args.verbose, cfg.log_file)
         from .intruder_guard import IntruderGuard
         from .worker_client import WorkerClient
+        from .face_guard import load_verdict
 
         env = detect_environment()
-        print("=" * 50)
-        print("  Intruder Guard - Armed Mode")
-        print("=" * 50)
-        print(f"  Environment: {env.platform_name}")
+        quiet = args.minimized
+
+        # Single instance: the autostart task and a manual run must not stack
+        lock = _acquire_guard_lock()
+        if lock is None:
+            log.info("guard already running -- exiting")
+            return 0
+
+        if not quiet:
+            print("=" * 50)
+            print("  Intruder Guard - Armed Mode")
+            print("=" * 50)
+            print(f"  Environment: {env.platform_name}")
 
         worker = None
         if cfg.worker_url:
@@ -545,6 +590,8 @@ socket_secret = "{esc(socket_secret)}"
             g.arm(verbose=True)
         except KeyboardInterrupt:
             g.disarm()
+        finally:
+            _release_guard_lock(lock)
         return 0
 
     # guard-enroll: capture the owner's face for the guard's verdict
@@ -607,6 +654,123 @@ socket_secret = "{esc(socket_secret)}"
         return 1
 
     # pass: set or change the account disarm pass
+    # guard-autostart: run the guard at every logon, elevated
+    if args.cmd == "guard-autostart":
+        if os.name != "nt":
+            print("  [ERROR] Autostart uses Windows Task Scheduler.")
+            return 1
+        if args.remove:
+            code, out = _schtasks(["/Delete", "/TN", GUARD_TASK, "/F"])
+            print("  Task removed." if code == 0 else f"  [WARN] {out}")
+            _release_guard_lock(APP_DIR / "guard.lock")
+            return 0
+        tr = f'"{_pythonw_path()}" -m battery_notifier guard --minimized'
+        code, out = _schtasks(["/Create", "/TN", GUARD_TASK, "/TR", tr,
+                               "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"])
+        if code == 0:
+            print("  [OK] Guard now starts automatically at every logon")
+            print("       (hidden window, logs in %s/guard.log)" % APP_DIR)
+            print("       Remove anytime: battery-music guard-autostart --remove")
+            return 0
+        print(f"  [ERROR] {out}")
+        return 1
+
+    # quiet-arm: nightly auto-arm window
+    if args.cmd == "quiet-arm":
+        import re as _re
+        if args.remove:
+            code1, _ = _schtasks(["/Delete", "/TN", QUIET_TASK + "-Start", "/F"])
+            code2, _ = _schtasks(["/Delete", "/TN", QUIET_TASK + "-End", "/F"])
+            _save_config_values({"quiet_arm": "", "quiet_auto_disarm": False})
+            print("  Quiet-arm tasks removed.")
+            return 0
+        if not args.time_range:
+            print("  [ERROR] Give a range, e.g. battery-music quiet-arm 23:00-07:00")
+            return 1
+        m = _re.fullmatch(r"(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})", args.time_range.strip())
+        if not m:
+            print("  [ERROR] Range must look like 23:00-07:00")
+            return 1
+        start_t = f"{int(m.group(1)):02d}:{m.group(2)}"
+        end_t = f"{int(m.group(3)):02d}:{m.group(4)}"
+        if not cfg.worker_url:
+            print("  [ERROR] No worker_url configured. Run 'battery-music init' first.")
+            return 2
+
+        tr = f'"{sys.executable}" -m battery_notifier quiet-arm-run start'
+        code, out = _schtasks(["/Create", "/TN", QUIET_TASK + "-Start", "/TR", tr,
+                               "/SC", "DAILY", "/ST", start_t, "/F"])
+        if code != 0:
+            print(f"  [ERROR] {out}")
+            return 1
+        _save_config_values({"quiet_arm": f"{start_t}-{end_t}"})
+        if args.auto_disarm:
+            import getpass as _gp
+            from .face_guard import _dpapi_protect, MODEL_MAGIC
+            p = _gp.getpass("  Pass to auto-disarm with (stored DPAPI-encrypted): ").strip()
+            (APP_DIR / "quiet_pass.bin").write_bytes(
+                b"QAP1:" + _dpapi_protect(p.encode()) if p else b"")
+            _save_config_values({"quiet_auto_disarm": True})
+            end_tr = f'"{sys.executable}" -m battery_notifier quiet-arm-run end'
+            code, out = _schtasks(["/Create", "/TN", QUIET_TASK + "-End", "/TR", end_tr,
+                                   "/SC", "DAILY", "/ST", end_t, "/F"])
+            if code != 0:
+                print(f"  [WARN] End task failed: {out}")
+        print(f"  [OK] Account auto-arms daily at {start_t}"
+              + (f" and disarms at {end_t}" if args.auto_disarm else
+                 f" (stays armed past {end_t}; disarm with your pass)"))
+        return 0
+
+    # quiet-arm-run: invoked BY the scheduled task, never by humans
+    if args.cmd == "quiet-arm-run":
+        setup_logging(False, APP_DIR / "quiet_arm.log")
+        from .worker_client import WorkerClient
+        mode = args.mode
+        worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+        if mode == "start":
+            r = worker.arm_account(True)
+            print("quiet-arm start:", r)
+            return 0 if r.get("ok") else 1
+        # end: only when auto-disarm was configured
+        qp = APP_DIR / "quiet_pass.bin"
+        if not cfg.quiet_auto_disarm or not qp.exists():
+            print("quiet-arm end: auto-disarm not configured; account stays armed")
+            return 0
+        raw = qp.read_bytes()
+        pass_code = None
+        if raw.startswith(b"QAP1:"):
+            from .face_guard import _dpapi_unprotect
+            pass_code = _dpapi_unprotect(raw[5:]).decode("utf-8", "replace")
+        r = worker.arm_account(False, pass_code=pass_code)
+        print("quiet-arm end:", r)
+        return 0 if r.get("ok") else 1
+
+    # domain: point the relay at your own domain
+    if args.cmd == "domain":
+        name = args.name.strip().lower().lstrip(".")
+        if "/" in name or name.count(".") < 1:
+            print("  [ERROR] Give a bare domain, e.g. battery-music domain example.com")
+            return 1
+        url = f"https://battery-relay.{name}"
+        import requests as _rq
+        try:
+            r = _rq.get(url + "/health", timeout=8)
+            print(f"  Health check: HTTP {r.status_code}")
+        except Exception as e:
+            print(f"  [WARN] {url} not reachable yet ({type(e).__name__}) -- that's fine,")
+            print("  finish the Cloudflare steps below first, then re-run this command.")
+        _save_config_values({"worker_url": url})
+        print(f"  [OK] worker_url saved: {url}")
+        print("""
+  Finish it in Cloudflare (one time):
+    1. dash.cloudflare.com -> Workers & Pages -> battery-relay
+    2. Settings -> Domains & Routes -> Add -> Custom domain
+       -> battery-relay.YOURDOMAIN
+    3. Same for the staging worker if you use it.
+  The phone: re-pair once with the new URL (Pair screen -> Relay URL).
+""")
+        return 0
+
     if args.cmd == "pass":
         setup_logging(False, cfg.log_file)
         from .worker_client import WorkerClient
@@ -899,3 +1063,68 @@ socket_secret = "{esc(socket_secret)}"
 
     Monitor(cfg).run()
     return 0
+
+
+# ---------------------------------------------------------------------------
+# v2.4: autostart, quiet-hours, custom domain, single-instance lock
+# ---------------------------------------------------------------------------
+
+GUARD_TASK = "BatteryMusicGuard"
+QUIET_TASK = "BatteryMusicQuietArm"
+
+
+def _acquire_guard_lock():
+    """None if another guard is running, else the lock file to release."""
+    lock = APP_DIR / "guard.lock"
+    if lock.exists():
+        try:
+            pid = int(lock.read_text().strip())
+        except ValueError:
+            pid = -1
+        if os.name == "nt" and pid > 0:
+            try:
+                import ctypes
+                k32 = ctypes.windll.kernel32
+                handle = k32.OpenProcess(0x100000, False, pid)  # QUERY_LIMITED
+                if handle:
+                    k32.CloseHandle(handle)
+                    return None  # that pid is alive -> a guard is running
+            except Exception:
+                return None
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(str(os.getpid()))
+    return lock
+
+
+def _release_guard_lock(lock) -> None:
+    try:
+        if lock:
+            if lock.exists() and lock.read_text().strip() == str(os.getpid()):
+                lock.unlink()
+    except Exception as e:
+        log.debug("guard lock release failed: %s", e)
+
+
+def _schtasks(args: list) -> tuple:
+    r = subprocess.run(["schtasks"] + args, capture_output=True, text=True, timeout=30)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def _pythonw_path() -> str:
+    pyw = Path(sys.executable).with_name("pythonw.exe")
+    return str(pyw if pyw.exists() else sys.executable)
+
+
+def _save_config_values(updates: dict) -> None:
+    import tomlkit
+    cfg_path = APP_DIR / "config.toml"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    if cfg_path.exists():
+        doc = tomlkit.parse(cfg_path.read_text(encoding="utf-8"))
+    else:
+        doc = tomlkit.document()
+    if "battery_notifier" not in doc:
+        doc["battery_notifier"] = tomlkit.table()
+    for k, v in updates.items():
+        doc["battery_notifier"][k] = v
+    cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")

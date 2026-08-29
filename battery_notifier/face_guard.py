@@ -46,9 +46,41 @@ ENROLL_PHASES = [
     ("smile, then go back to neutral", 6),
 ]
 
+# v2.4 liveness: a printed photo is pixel-static between two frames while a
+# live face blinks and micro-moves. Gate the OWNER stand-down on this.
+LIVENESS_MIN_SCORE = 2.5
+
 
 class CameraUnavailable(RuntimeError):
     """Camera present but unusable; .args[0] carries the guided fix."""
+
+
+def liveness_score(frame_a, frame_b) -> float:
+    """Mean eye-region difference between two frames.
+
+    High  -> eyes moved / blinked  -> live human
+    Low   -> pixels identical      -> printed photo or screen replay
+
+    Uses the eye band (upper third of detected faces); without detectable
+    faces it falls back to whole-frame difference, which still catches a
+    static photo.
+    """
+    import cv2
+    import numpy as np
+
+    def eye_band(frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = _detect_faces(frame)
+        if len(faces) >= 1:
+            x, y, w, h = max(faces, key=lambda f: f[2])
+            band = gray[y:y + int(h * 0.45), x:x + w]
+            return cv2.resize(band, (120, 50))
+        return cv2.resize(gray, (120, 90))
+
+    a, b = eye_band(frame_a), eye_band(frame_b)
+    if a.shape != b.shape:
+        return 0.0
+    return float(np.mean(cv2.absdiff(a, b)))
 
 
 def model_path() -> Path:

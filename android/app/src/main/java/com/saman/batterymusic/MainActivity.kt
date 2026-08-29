@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
@@ -17,7 +18,7 @@ import androidx.compose.runtime.setValue
  * dashboard. The armed flag and token live in encrypted prefs, so the app
  * resumes its state after process death.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private lateinit var prefs: Prefs
     private var paired by mutableStateOf(false)

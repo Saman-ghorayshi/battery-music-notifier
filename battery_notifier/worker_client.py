@@ -122,13 +122,26 @@ class WorkerClient:
             payload["current_pass_code"] = current_pass_code
         return self._post("/api/pass/setup", payload)
 
-    def arm_account(self, armed: bool, pass_code: str = None) -> dict:
-        """Arm/disarm the whole account. Disarming needs the pass when one
-        is set. Raw response (callers need the error strings)."""
+    def arm_account(self, armed: bool, pass_code: str = None, key_sig: str = None) -> dict:
+        """Arm/disarm the whole account. Disarming needs EITHER the pass OR
+        a valid device-key signature over a fresh challenge. Raw response."""
         payload = {"armed": bool(armed)}
         if pass_code:
             payload["pass_code"] = pass_code
+        if key_sig:
+            payload["key_sig"] = key_sig
         return self._post("/api/arm", payload)
+
+    def set_disarm_key(self, public_key_b64: str, pass_code: str = None) -> dict:
+        """Upload the device's SPKI public key for biometric disarm."""
+        payload = {"public_key": public_key_b64}
+        if pass_code:
+            payload["pass_code"] = pass_code
+        return self._post("/api/key/setup", payload)
+
+    def arm_challenge(self) -> dict:
+        """Fresh one-time challenge for the device-key disarm signature."""
+        return self._get("/api/arm/challenge")
 
     # ---- Intruder snapshots (v2.1) ----
 

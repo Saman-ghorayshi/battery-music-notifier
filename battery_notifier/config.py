@@ -125,6 +125,12 @@ class Config:
     # (battery-music guard-enroll). No model -> plain alert behavior.
     guard_siren: bool = True
     guard_autolock: bool = True
+    # v2.4 photo burst: N frames spaced apart, shipped as one montage
+    burst_count: int = 3
+    burst_interval: float = 1.5
+    # v2.4 quiet-hours auto-arm, e.g. "23:00-07:00" (empty = off)
+    quiet_arm: str = ""
+    quiet_auto_disarm: bool = False
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Config":

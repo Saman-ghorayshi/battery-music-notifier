@@ -166,17 +166,18 @@ fun DashScreen(prefs: Prefs, onUnpaired: () -> Unit) {
                             status = if (r.ok) "Armed -- charger pull and intruders are watched."
                                      else "Arm failed: ${r.error}"
                         }
+                    } else if (KeystoreManager.hasKey() && context is androidx.fragment.app.FragmentActivity) {
+                        // Preferred disarm: fingerprint-signed, no typing
+                        launchBiometricDisarm(context, prefs, scope, onUpdate = { status = it },
+                            onPassFallback = { passInput = ""; passError = null; passDialog = true })
+                    } else if (state?.hasPass == true) {
+                        passInput = ""
+                        passError = null
+                        passDialog = true
                     } else {
-                        // The dangerous direction: ask for the pass when one exists
-                        if (state?.hasPass == true) {
-                            passInput = ""
-                            passError = null
-                            passDialog = true
-                        } else {
-                            scope.launch {
-                                val r = withContext(Dispatchers.IO) { prefs.newClient().armAccount(false) }
-                                status = if (r.ok) "Disarmed." else "Disarm failed: ${r.error}"
-                            }
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) { prefs.newClient().armAccount(false) }
+                            status = if (r.ok) "Disarmed." else "Disarm failed: ${r.error}"
                         }
                     }
                 },
@@ -233,6 +234,74 @@ fun DashScreen(prefs: Prefs, onUnpaired: () -> Unit) {
 }
 
 /**
+ * Preferred disarm: the phone itself is the passkey. The private key lives
+ * in AndroidKeyStore, gated by the fingerprint; only a signature over a
+ * fresh relay challenge travels. Falls back to the pass dialog when
+ * biometrics are unavailable.
+ */
+fun launchBiometricDisarm(
+    activity: androidx.fragment.app.FragmentActivity,
+    prefs: Prefs,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onUpdate: (String) -> Unit,
+    onPassFallback: () -> Unit,
+) {
+    try {
+        KeystoreManager.ensureKey()
+        val sig = KeystoreManager.signingSignature()
+        val executor = androidx.core.content.ContextCompat.getMainExecutor(activity)
+        val prompt = androidx.biometric.BiometricPrompt(
+            activity, executor,
+            object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(
+                    result: androidx.biometric.BiometricPrompt.AuthenticationResult,
+                ) {
+                    scope.launch {
+                        val challenge = withContext(Dispatchers.IO) {
+                            prefs.newClient().armChallenge()
+                        }
+                        if (challenge == null) {
+                            onUpdate("Could not get a challenge from the relay.")
+                            return@launch
+                        }
+                        val raw = try {
+                            KeystoreManager.derToRaw(KeystoreManager.sign(sig))
+                        } catch (e: Exception) {
+                            onUpdate("Signing failed: ${e.message}")
+                            return@launch
+                        }
+                        val keySig = android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP)
+                        val r = withContext(Dispatchers.IO) {
+                            prefs.newClient().armAccount(false, keySig = keySig)
+                        }
+                        if (r.ok) onUpdate("Disarmed with fingerprint.")
+                        else onUpdate("Disarm failed: ${r.error}")
+                    }
+                }
+
+                override fun onAuthenticationError(code: Int, msg: CharSequence) {
+                    if (code == androidx.biometric.BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                        code == androidx.biometric.BiometricPrompt.ERROR_USER_CANCELED
+                    ) {
+                        onPassFallback()
+                    } else {
+                        onUpdate(msg.toString())
+                    }
+                }
+            },
+        )
+        val info = androidx.biometric.BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Disarm with fingerprint")
+            .setSubtitle("Signs a one-time challenge -- nothing secret leaves the phone")
+            .setNegativeButtonText("Use pass instead")
+            .build()
+        prompt.authenticate(info, androidx.biometric.BiometricPrompt.CryptoObject(sig))
+    } catch (_: Exception) {
+        onPassFallback() // no biometrics enrolled, key issues -> pass instead
+    }
+}
+
+/**
  * Setup checklist: everything the app needs to actually work without the
  * owner babysitting it. Items tick themselves off as they're satisfied.
  */
@@ -253,7 +322,8 @@ fun SetupChecklist(prefs: Prefs, state: PollState?, onUpdate: (String) -> Unit) 
         pm?.isIgnoringBatteryOptimizations(context.packageName) == true
     }
     val passOk = state?.hasPass == true
-    if (notifGranted && batteryOk && passOk) return
+    val keyOk = state?.hasKey == true || KeystoreManager.hasKey()
+    if (notifGranted && batteryOk && (passOk || keyOk)) return
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -262,8 +332,10 @@ fun SetupChecklist(prefs: Prefs, state: PollState?, onUpdate: (String) -> Unit) 
                  else "\u2717 Notifications allowed (needed for alerts)")
             Text(if (batteryOk) "\u2713 Battery unrestricted"
                  else "\u2717 Battery unrestricted (needed for background watching)")
-            Text(if (passOk) "\u2713 Disarm pass set"
-                 else "\u2717 Disarm pass set (protects against unwanted disarms)")
+            Text(if (keyOk) "\u2713 Fingerprint disarm key enrolled"
+                 else "\u2717 Fingerprint disarm key enrolled")
+            Text(if (passOk) "\u2713 Disarm pass set (backup option)"
+                 else "\u2717 Disarm pass set (backup option)")
             if (!notifGranted) {
                 OutlinedButton(onClick = {
                     notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -277,6 +349,24 @@ fun SetupChecklist(prefs: Prefs, state: PollState?, onUpdate: (String) -> Unit) 
                         )
                     } catch (_: Exception) {}
                 }) { Text("Open battery settings") }
+            }
+            if (!keyOk) {
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        val r = withContext(Dispatchers.IO) {
+                            try {
+                                KeystoreManager.ensureKey()
+                                prefs.newClient().setDisarmKey(KeystoreManager.publicKeyB64())
+                            } catch (e: Exception) {
+                                ApiResult(false, e.message ?: "key error")
+                            }
+                        }
+                        onUpdate(
+                            if (r.ok) "Fingerprint disarm key enrolled."
+                            else "Key setup failed: ${r.error}",
+                        )
+                    }
+                }) { Text("Enroll fingerprint disarm key") }
             }
             if (!passOk) {
                 var pass1 by remember { mutableStateOf("") }

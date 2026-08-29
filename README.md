@@ -501,7 +501,50 @@ wizard, or the phone's Finish-setup card):
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
 | `/api/pass/setup` | POST | Bearer | Set/change the disarm pass (hash only) |
-| `/api/arm` | POST | Bearer | Arm (free) / disarm (needs pass when set) |
+| `/api/arm` | POST | Bearer | Arm (free) / disarm (pass OR device-key signature) |
+| `/api/key/setup` | POST | Bearer | Enroll the phone's disarm public key (SPKI) |
+| `/api/arm/challenge` | GET | Bearer | One-time 120 s challenge for the key signature |
+
+### Autostart, bursts, liveness, biometric key (v2.4)
+
+- **Guard autostart** -- `battery-music guard-autostart` creates an elevated
+  Task Scheduler entry (hidden window, logs to `guard.log` in the app
+  config dir), so the laptop guard starts itself at every logon. A lockfile
+  prevents double-running. `--remove` undoes it.
+- **Photo burst** -- every intrusion captures 3 frames ~1.5 s apart
+  (config: `burst_count`, `burst_interval`), ships as one side-by-side
+  montage, and the sharpest frame drives the face verdict.
+- **Liveness check** -- a printed photo of you is pixel-static between
+  frames. If LBPH says "owner" but the eye region does not move across the
+  burst, the verdict becomes *spoof suspected*: lock + siren + alert.
+- **Quiet-hours** -- `battery-music quiet-arm 23:00-07:00` auto-arms the
+  account nightly (arming is free); add `--auto-disarm` to also disarm at
+  the end time (the pass then sits DPAPI-encrypted on your disk).
+
+### Disarm options: fingerprint key AND pass (v2.4)
+
+Two independent second factors -- use either:
+
+1. **Phone fingerprint (default when enrolled):** the phone generates an
+   EC P-256 key **inside AndroidKeyStore**, gated by your fingerprint; only
+   the public half is uploaded. Disarming signs a one-time 120 s challenge;
+   the relay verifies it with WebCrypto. Nothing secret ever leaves the
+   phone, nothing to type. Enroll from the phone's Finish-setup card.
+2. **The shared pass** -- unchanged: `battery-music pass`, typed on demand.
+
+Replacing an enrolled key requires the pass, so a thief holding your phone
+token can't enroll their own. Challenges are single-use and expire in
+120 s. (This is WebAuthn-*equivalent*: hardware-backed key + biometric gate
++ challenge/response, without the FIDO2/rpId dependency a sideloaded APK
+cannot rely on.)
+
+### Custom domain (placeholder ready)
+
+`battery-music domain example.com` sets `https://battery-relay.example.com`
+as your relay URL and prints the one-time Cloudflare steps (Worker ->
+Settings -> Domains & Routes -> add `battery-relay.example.com`). Until the
+domain exists in your dashboard the health check only warns -- buy the
+domain, click, done; the phone needs one re-pair with the new URL.
 
 ### Who can silence what (v2.2.3)
 

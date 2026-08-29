@@ -344,6 +344,7 @@ async function handlePoll(request, db, user) {
     armed: user.armed ? 1 : 0,
     armed_by: user.armed_by || null,
     has_pass: !!user.disarm_hash,
+    has_key: !!user.disarm_pubkey,
   });
 }
 
@@ -402,6 +403,19 @@ async function handleArm(request, db, user, env) {
     try {
       await db.prepare("DELETE FROM pair_fails WHERE ip_window = ?").bind(pfKey).run();
     } catch (_) {}
+  } else if (!wantArmed && body.key_sig && user.disarm_pubkey) {
+    // v2.4: biometric device-key disarm. The signature must cover a fresh
+    // challenge minted for this account; verification is WebCrypto ECDSA
+    // P-256 / SHA-256 against the stored SPKI public key.
+    const challenge = await db.prepare(
+      "SELECT challenge, expires_at FROM arm_challenges WHERE user_id = ?"
+    ).bind(user.user_id).first();
+    if (!challenge || challenge.expires_at < now()) {
+      return json({ ok: false, error: "challenge_required" }, 401);
+    }
+    const okSig = await verifyDisarmSignature(user.disarm_pubkey, challenge.challenge, body.key_sig);
+    if (!okSig) return json({ ok: false, error: "invalid_sig" }, 401);
+    await db.prepare("DELETE FROM arm_challenges WHERE user_id = ?").bind(user.user_id).run();
   }
   await db.prepare(
     "UPDATE users SET armed = ?, armed_by = ?, last_seen = ? WHERE user_id = ?"
@@ -571,6 +585,68 @@ async function sendTelegramNotify(env, db, user, snapshotId) {
 }
 
 // ---- Admin endpoints ----
+
+// ---- v2.4: device disarm key (WebAuthn-style challenge/response) ---------
+// A paired phone keeps an EC P-256 private key inside AndroidKeyStore,
+// gated by its fingerprint. Only the SPKI public key lives here. Disarm
+// with the key = sign a fresh 120s challenge; verification is WebCrypto.
+
+const CHALLENGE_TTL = 120;
+
+function base64ToBytes(b) {
+  const bin = atob(b);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+async function verifyDisarmSignature(pubB64, challengeHex, sigB64) {
+  try {
+    const key = await crypto.subtle.importKey(
+      "spki", base64ToBytes(pubB64),
+      { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"],
+    );
+    const challengeBytes = new Uint8Array(
+      (challengeHex.match(/.{2}/g) || []).map(h => parseInt(h, 16)),
+    );
+    return await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" }, key, base64ToBytes(sigB64), challengeBytes,
+    );
+  } catch (e) {
+    console.error("disarm key verify error:", e.message);
+    return false;
+  }
+}
+
+async function handleKeySetup(request, db, user) {
+  const body = await request.json().catch(() => ({}));
+  const pub = (body.public_key || "").trim();
+  // SPKI EC P-256 is 91 bytes -> 124 base64 chars; accept a small range
+  if (!/^A?[A-Za-z0-9+/]{100,180}={0,2}$/.test(pub) || pub.length < 100) {
+    return json({ ok: false, error: "invalid_public_key" }, 400);
+  }
+  // Replacing an existing key is a thief move unless you prove ownership
+  if (user.disarm_pubkey && user.disarm_hash) {
+    const pass = (body.pass_code || "").trim();
+    if (!pass) return json({ ok: false, error: "pass_required" }, 401);
+    if (await sha256(pass) !== user.disarm_hash) {
+      return json({ ok: false, error: "invalid_pass" }, 401);
+    }
+  }
+  await db.prepare("UPDATE users SET disarm_pubkey = ? WHERE user_id = ?")
+    .bind(pub, user.user_id).run();
+  return json({ ok: true });
+}
+
+async function handleArmChallenge(db, user) {
+  const challenge = randomToken(); // 48 hex chars of crypto-random
+  await db.prepare(
+    `INSERT INTO arm_challenges (user_id, challenge, expires_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET challenge = excluded.challenge,
+       expires_at = excluded.expires_at`
+  ).bind(user.user_id, challenge, now() + CHALLENGE_TTL).run();
+  return json({ ok: true, challenge, expires_in: CHALLENGE_TTL });
+}
 
 async function handleAdminLogin(request, db, env) {
   // Guard: if ADMIN_KEY secret is not configured, don't allow login
@@ -980,6 +1056,19 @@ export default {
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handleArm(request, db, u, env) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    // v2.4 device disarm key
+    if (path === "/api/key/setup" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handleKeySetup(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    if (path === "/api/arm/challenge" && request.method === "GET") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handleArmChallenge(db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     // ---- Admin API ----
     if (path === "/admin/login" && request.method === "POST") return handleAdminLogin(request, db, env);

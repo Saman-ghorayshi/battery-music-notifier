@@ -141,6 +141,58 @@ def snapshot_from_frame(frame) -> bytes | None:
     return bytes(buf)
 
 
+def sharpest_frame(frames):
+    """Focus measure (Laplacian variance) — the sharpest frame is the best
+    evidence and the most reliable face-verdict input."""
+    try:
+        import cv2
+        return max(frames, key=lambda f: cv2.Laplacian(
+            cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
+    except Exception:
+        return frames[0]
+
+
+def snapshot_montage(frames) -> bytes | None:
+    """Side-by-side burst in ONE image: three moments, one snapshot row.
+    Steps JPEG quality down until the worker's 150 KB cap is comfortable."""
+    import cv2
+    if not frames:
+        return None
+    if len(frames) == 1:
+        return snapshot_from_frame(frames[0])
+    height = min(f.shape[0] for f in frames)
+    resized = []
+    for f in frames[:3]:
+        scale = height / f.shape[0]
+        resized.append(cv2.resize(f, (int(f.shape[1] * scale), height)))
+    strip = cv2.hconcat(resized)
+    if strip.shape[1] > SNAPSHOT_MAX_WIDTH:
+        scale = SNAPSHOT_MAX_WIDTH / strip.shape[1]
+        strip = cv2.resize(strip, (SNAPSHOT_MAX_WIDTH, int(strip.shape[0] * scale)))
+    for q in (JPEG_QUALITY, 60, 50, 40):
+        ok, buf = cv2.imencode(".jpg", strip, [int(cv2.IMWRITE_JPEG_QUALITY), q])
+        if not ok:
+            return None
+        if len(buf) <= 140_000:
+            return bytes(buf)
+    return None
+
+
+def capture_burst(camera_index: int, count: int, interval: float) -> list:
+    """`count` frames spaced `interval` seconds apart (first immediately)."""
+    frames = []
+    frame = grab_frame(camera_index)
+    if frame is None:
+        return frames
+    frames.append(frame)
+    while len(frames) < max(1, count):
+        time.sleep(max(0.0, interval))
+        f = grab_frame(camera_index)
+        if f is not None:
+            frames.append(f)
+    return frames
+
+
 def grab_snapshot(camera_index: int = 0) -> bytes | None:
     """One downscaled JPEG frame from the webcam; None if no camera or cv2."""
     frame = grab_frame(camera_index)
@@ -237,10 +289,20 @@ class IntruderGuard:
             return
 
         verdict = None
-        frame = grab_frame(self.camera_index)
-        if frame is not None and self.face_verdict:
+        burst_count = max(1, int(getattr(self.cfg, "burst_count", 3) or 1))
+        burst_gap = float(getattr(self.cfg, "burst_interval", 1.5) or 0)
+        frames = capture_burst(self.camera_index, burst_count, burst_gap)
+        if frames and self.face_verdict:
             try:
-                verdict = self.face_verdict(frame)
+                verdict = self.face_verdict(sharpest_frame(frames))
+                if verdict == "owner" and len(frames) >= 2:
+                    from .face_guard import LIVENESS_MIN_SCORE, liveness_score
+                    score = liveness_score(frames[0], frames[-1])
+                    if score < LIVENESS_MIN_SCORE:
+                        # Static pixels where a live face should blink: a
+                        # printed photo of the owner. Fail toward locking.
+                        log.warning("liveness failed (score %.2f) -- owner treated as spoof", score)
+                        verdict = "unknown"
             except Exception as e:
                 log.error("face verdict failed: %s", e)
                 verdict = "unknown"  # fail toward locking, never ignoring
@@ -254,7 +316,7 @@ class IntruderGuard:
 
         # No camera evidence changes the alert, not whether we send it:
         # an intrusion without a photo still rings the phone.
-        image = snapshot_from_frame(frame) if frame is not None else None
+        image = snapshot_montage(frames) if frames else None
         snap_id = self.worker.upload_snapshot(image) if (self.worker and image) else None
         if self.worker:
             self.worker.send_alert(
