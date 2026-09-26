@@ -10,10 +10,14 @@ import org.json.JSONObject
 /** Result of an API call. [error] carries the worker's own error string. */
 data class ApiResult(val ok: Boolean, val error: String? = null, val token: String? = null)
 
+/** One other device on the account, from /api/poll's other_devices list. */
+data class DeviceHeartbeat(val name: String?, val platform: String?, val lastSeen: Long)
+
 /** One /api/poll answer: relay alert state plus the latest snapshot, if any. */
 data class PollState(
     val alertActive: Boolean,
     val alertType: String,
+    val alertTs: Long = 0,
     val batteryPct: Int,
     val isCharging: Boolean,
     val snapshotId: Long?,
@@ -21,6 +25,7 @@ data class PollState(
     val armedBy: String? = null,
     val hasPass: Boolean = false,
     val hasKey: Boolean = false,
+    val otherDevices: List<DeviceHeartbeat> = emptyList(),
 )
 
 /**
@@ -103,6 +108,7 @@ class ApiClient(private val workerUrl: String, private var token: String) {
                 PollState(
                     alertActive = body.optInt("alert_active") == 1,
                     alertType = body.optString("alert_type", ""),
+                    alertTs = body.optLong("alert_ts", 0),
                     batteryPct = body.optInt("battery_pct", -1),
                     isCharging = body.optInt("is_charging") == 1,
                     snapshotId = if (body.isNull("snapshot_id")) null else body.optLong("snapshot_id"),
@@ -110,6 +116,7 @@ class ApiClient(private val workerUrl: String, private var token: String) {
                     armedBy = if (body.isNull("armed_by")) null else body.optString("armed_by"),
                     hasPass = body.optBoolean("has_pass", false),
                     hasKey = body.optBoolean("has_key", false),
+                    otherDevices = parseHeartbeats(body.optJSONArray("other_devices")),
                 )
             }
         } catch (e: Exception) {
@@ -125,6 +132,19 @@ class ApiClient(private val workerUrl: String, private var token: String) {
             }
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /** Tolerates a missing other_devices field (older workers) and nulls inside. */
+    private fun parseHeartbeats(arr: org.json.JSONArray?): List<DeviceHeartbeat> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            DeviceHeartbeat(
+                name = if (o.isNull("name")) null else o.optString("name"),
+                platform = if (o.isNull("platform")) null else o.optString("platform"),
+                lastSeen = o.optLong("last_seen", 0),
+            )
         }
     }
 

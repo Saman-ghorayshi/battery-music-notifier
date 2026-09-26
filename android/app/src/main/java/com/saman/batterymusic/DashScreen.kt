@@ -73,6 +73,9 @@ fun DashScreen(
     var passError by remember { mutableStateOf<String?>(null) }
     var unpairConfirm by remember { mutableStateOf(false) }
     var ringing by remember { mutableStateOf(ArmService.ringing) }
+    var otherSilent by remember { mutableStateOf(ArmService.otherSilent) }
+    var otherSilentName by remember { mutableStateOf(ArmService.otherSilentName) }
+    var otherSilentSince by remember { mutableStateOf(ArmService.otherSilentSince) }
     var sirenTestRunning by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -90,6 +93,9 @@ fun DashScreen(
     LaunchedEffect(Unit) {
         while (true) {
             ringing = ArmService.ringing
+            otherSilent = ArmService.otherSilent
+            otherSilentName = ArmService.otherSilentName
+            otherSilentSince = ArmService.otherSilentSince
             delay(400)
         }
     }
@@ -181,7 +187,13 @@ fun DashScreen(
                                         ArmService.silence()
                                         Notifications.cancelThiefAlert(context)
                                         status = if (cleared.ok) "Alarm stopped everywhere."
-                                                 else "Clear failed: ${cleared.error}"
+                                                 else when (cleared.error) {
+                                                     // This phone raised the THIEF (phone
+                                                     // theft): the relay refuses self-clear.
+                                                     "origin_cannot_clear" ->
+                                                         "This phone raised the alarm -- clear it from the laptop, or disarm."
+                                                     else -> "Clear failed: ${cleared.error}"
+                                                 }
                                     }
                                 },
                                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
@@ -228,6 +240,45 @@ fun DashScreen(
                         Spacer(Modifier.height(8.dp))
                         Image(it.asImageBitmap(), contentDescription = "Intruder snapshot")
                     }
+                }
+            }
+        }
+
+        // Dead-man's switch: the laptop's heartbeat went stale while armed.
+        if (otherSilent) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                ),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "LAPTOP WENT SILENT",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    val since = if (otherSilentSince > 0)
+                        java.time.Instant.ofEpochSecond(otherSilentSince)
+                            .atZone(java.time.ZoneId.systemDefault())
+                            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+                    else "--:--"
+                    Text(
+                        "${otherSilentName ?: "Your laptop"} stopped checking in at $since -- asleep, crashed, or taken.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            ArmService.silence()
+                            Notifications.cancelOtherSilent(context)
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("SILENCE") }
                 }
             }
         }

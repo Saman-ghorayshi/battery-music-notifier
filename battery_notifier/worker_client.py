@@ -105,9 +105,22 @@ class WorkerClient:
         return False
 
     def clear_alert(self) -> bool:
-        """Clear the active alert."""
+        """Clear the active alert. Returns False if the worker refused or the
+        call failed (e.g. 403 origin_cannot_clear: the device that raised a
+        THIEF_ALERT is not allowed to clear it -- a thief re-plugging must not
+        silence the fleet). Callers only need to tolerate a False return."""
         resp = self._post("/api/clear", {})
-        return resp.get("ok", False)
+        if resp.get("ok"):
+            return True
+        error = resp.get("error", "unknown")
+        if error == "origin_cannot_clear":
+            log.warning(
+                "Worker refused THIEF-clear (origin_cannot_clear): "
+                "disarm with pass/key instead. This is by design."
+            )
+        else:
+            log.warning("clear_alert failed: %s", error)
+        return False
 
     def poll(self) -> dict:
         """Poll for alert state (laptop checks if phone sent alert)."""

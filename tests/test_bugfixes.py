@@ -738,8 +738,9 @@ def test_thief_catcher_telegram_mode_sends_alert(mock_post):
     tc = ThiefCatcher(cfg, player=mock_player)
     tc._trigger_alert("telegram", 75, verbose=False)
 
-    # Player should NOT play locally in telegram mode
-    mock_player.play.assert_not_called()
+    # The stolen machine must scream in EVERY mode, telegram included
+    # (behavior change: local play is now unconditional).
+    mock_player.play.assert_called_once()
     # Should have called Telegram setMyDescription
     mock_post.assert_called_once()
     call_url = mock_post.call_args[0][0]

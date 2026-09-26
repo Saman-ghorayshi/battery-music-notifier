@@ -211,6 +211,31 @@ async function authUser(request, db) {
   return user;
 }
 
+// sha256 of the token presented in the Authorization header. Mirrors the
+// extraction in authUser(); used for device heartbeats and alert-origin.
+async function presentedTokenHash(request) {
+  const authHeader = request.headers.get("Authorization") || "";
+  if (!authHeader.startsWith(AUTH_PREFIX)) return "";
+  const rawToken = authHeader.slice(AUTH_PREFIX.length).trim();
+  if (!rawToken || rawToken.length < 16) return "";
+  return sha256(rawToken);
+}
+
+// v2.5 device heartbeat: one devices row per presenting token hash, so poll
+// can list which of the account's other devices are still alive. Best-effort:
+// a heartbeat failure must never break the main flow -- log and continue.
+async function touchDevice(db, userId, tokenHash, name, platform) {
+  if (!tokenHash) return;
+  try {
+    await db.prepare(
+      "INSERT INTO devices (user_id, token_hash, name, platform, last_seen) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT(token_hash) DO UPDATE SET last_seen = excluded.last_seen"
+    ).bind(userId, tokenHash, name || "", platform || "", now()).run();
+  } catch (e) {
+    console.error("device heartbeat failed:", e.message);
+  }
+}
+
 // ---- Admin auth: session key derived from ADMIN_KEY env var ----
 
 async function adminAuth(request, db) {
@@ -242,16 +267,23 @@ async function handleRegister(request, db, env) {
     "INSERT INTO users (token, device_name, platform, created_at, last_seen) VALUES (?, ?, ?, ?, ?)"
   ).bind(await sha256(token), deviceName, platform, t, t).run();
 
+  // The new token joins the device registry right away (best-effort), so the
+  // first poll already lists it correctly from the other side.
+  await touchDevice(db, result.meta.last_row_id, await sha256(token), deviceName, platform);
+
   return json({ ok: true, token, user_id: result.meta.last_row_id });
 }
 
 async function handlePing(request, db, user) {
   const t = now();
+  await touchDevice(db, user.user_id, await presentedTokenHash(request), user.device_name, user.platform);
   await db.prepare("UPDATE users SET last_seen = ? WHERE user_id = ?").bind(t, user.user_id).run();
   return json({ ok: true, server_time: t });
 }
 
 async function handleSendAlert(request, db, user, env, ctx) {
+  const tokenHash = await presentedTokenHash(request);
+  await touchDevice(db, user.user_id, tokenHash, user.device_name, user.platform);
   const body = await request.json().catch(() => ({}));
   // trim matters: "THIEF_ALERT " with trailing space would otherwise lose
   // its rate-limit bypass and get stored as a different type
@@ -285,9 +317,11 @@ async function handleSendAlert(request, db, user, env, ctx) {
   }
   const t = now();
 
+  // Store which token raised this alert: handleClearAlert refuses to let that
+  // device silence its own THIEF_ALERT (origin protection, see below).
   await db.prepare(
-    "UPDATE users SET alert_active = 1, alert_type = ?, alert_ts = ?, battery_pct = ?, is_charging = ?, total_alerts = total_alerts + 1, last_seen = ? WHERE user_id = ?"
-  ).bind(alertType, t, batteryPct, isCharging, t, user.user_id).run();
+    "UPDATE users SET alert_active = 1, alert_type = ?, alert_ts = ?, alert_origin = ?, battery_pct = ?, is_charging = ?, total_alerts = total_alerts + 1, last_seen = ? WHERE user_id = ?"
+  ).bind(alertType, t, tokenHash || null, batteryPct, isCharging, t, user.user_id).run();
 
   // Log event (bounded)
   await db.prepare(
@@ -319,6 +353,18 @@ async function handleSendAlert(request, db, user, env, ctx) {
 }
 
 async function handleClearAlert(request, db, user) {
+  // Drain the body before any early return -- replying without consuming the
+  // bytes stalls the TCP stream (same rule as the router's early returns).
+  try { await request.arrayBuffer(); } catch (_) {}
+  const tokenHash = await presentedTokenHash(request);
+  await touchDevice(db, user.user_id, tokenHash, user.device_name, user.platform);
+  // v2.5 origin protection: the device that raised the current THIEF_ALERT
+  // may not silence it -- a thief holding that device must not stop the
+  // alarm. BATTERY alerts and clears from the OTHER paired device stay free.
+  if (user.alert_active && user.alert_type === "THIEF_ALERT" && tokenHash &&
+      user.alert_origin === tokenHash) {
+    return json({ ok: false, error: "origin_cannot_clear" }, 403);
+  }
   await db.prepare(
     "UPDATE users SET alert_active = 0, alert_type = '', last_seen = ? WHERE user_id = ?"
   ).bind(now(), user.user_id).run();
@@ -328,9 +374,22 @@ async function handleClearAlert(request, db, user) {
 async function handlePoll(request, db, user) {
   // User polls their own state (laptop checks if phone sent alert).
   // Latest snapshot rides along so the poller can pull the photo.
+  const tokenHash = await presentedTokenHash(request);
+  await touchDevice(db, user.user_id, tokenHash, user.device_name, user.platform);
   const snap = await db.prepare(
     "SELECT snap_id FROM snapshots WHERE user_id = ? ORDER BY snap_id DESC LIMIT 1"
   ).bind(user.user_id).first();
+  // v2.5: the account's other devices, newest heartbeat first. Old clients
+  // ignore the extra field, and a registry hiccup must not break polling.
+  let otherDevices = [];
+  try {
+    const others = await db.prepare(
+      "SELECT name, platform, last_seen FROM devices WHERE user_id = ? AND token_hash != ? ORDER BY last_seen DESC LIMIT 5"
+    ).bind(user.user_id, tokenHash).all();
+    otherDevices = others.results || [];
+  } catch (e) {
+    console.error("other_devices query failed:", e.message);
+  }
   return json({
     ok: true,
     alert_active: user.alert_active,
@@ -345,6 +404,8 @@ async function handlePoll(request, db, user) {
     armed_by: user.armed_by || null,
     has_pass: !!user.disarm_hash,
     has_key: !!user.disarm_pubkey,
+    // v2.5: other devices on this account (never the polling token itself)
+    other_devices: otherDevices,
   });
 }
 
@@ -927,8 +988,15 @@ async function handlePairLink(request, db) {
   // persisted (users.linked_token); the plaintext is returned exactly once.
   // Re-linking rotates the linked token, de-authorizing the previous phone.
   const linkedToken = randomToken();
+  const linkedHash = await sha256(linkedToken);
   await db.prepare("UPDATE users SET linked_token = ?, last_seen = ? WHERE user_id = ?")
-    .bind(await sha256(linkedToken), now(), record.user_id).run();
+    .bind(linkedHash, now(), record.user_id).run();
+
+  // The joining phone joins the device registry too (best-effort); name and
+  // platform come from the account row it just paired with.
+  const owner = await db.prepare("SELECT device_name, platform FROM users WHERE user_id = ?")
+    .bind(record.user_id).first();
+  await touchDevice(db, record.user_id, linkedHash, owner?.device_name, owner?.platform);
 
   // Rare event -> inline increment is free; the code row is already deleted
   // so there is nothing to count retroactively.

@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS users (
   disarm_hash TEXT,
   -- v2.4: device disarm key (base64 SPKI EC P-256 public key)
   disarm_pubkey TEXT,
+  -- v2.5: token hash that raised the current alert. The device that raised a
+  -- THIEF_ALERT may not clear it (origin protection in handleClearAlert).
+  alert_origin TEXT,
   created_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
@@ -100,6 +103,19 @@ CREATE TABLE IF NOT EXISTS user_notify (
   chat_id TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+
+-- v2.5: device registry -- one row per presenting token (laptop + each paired
+-- phone), keyed by sha256(token). Authenticated requests upsert last_seen as
+-- a heartbeat; /api/poll returns the account's other devices from here.
+-- Existing deployments: run migration_devices.sql instead of this file.
+CREATE TABLE IF NOT EXISTS devices (
+  user_id INTEGER NOT NULL,
+  token_hash TEXT UNIQUE NOT NULL,     -- sha256 hex; plaintext never stored
+  name TEXT,
+  platform TEXT,
+  last_seen INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 
 -- ---------------------------------------------------------------------------
 -- MIGRATION (old schema -> v2.0.0): run once with

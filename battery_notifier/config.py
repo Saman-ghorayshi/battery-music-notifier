@@ -9,6 +9,119 @@ import logging
 log = logging.getLogger(__name__)
 APP_DIR = Path(os.environ.get("BATTERY_NOTIFIER_HOME", Path.home() / ".config" / "battery-music-notifier"))
 
+# ---------------------------------------------------------------------------
+# Secret storage (worker_token / admin_key)
+#
+# On Windows these are stored DPAPI-encrypted as "dpapi:<base64>" -- DPAPI
+# (CryptProtectData) ties the blob to the Windows user account, so a stolen
+# config.toml alone does not yield the relay token. No pip dependencies.
+# On other platforms the values stay plaintext and the file is chmod 0600.
+# ---------------------------------------------------------------------------
+_DPAPI_PREFIX = "dpapi:"
+_CRYPTPROTECT_UI_FORBIDDEN = 0x1
+
+# Fields whose values are secrets and get encrypted on save / decrypted on load
+SECRET_FIELDS = ("worker_token", "admin_key")
+
+
+def _dpapi_protect(data: bytes) -> bytes:
+    import ctypes
+
+    # pbData MUST be c_void_p, never c_char_p: reading a c_char_p field
+    # auto-converts to a Python bytes COPY, and LocalFree-ing that copy
+    # frees CPython's own allocator memory (heap corruption 0xc0000374).
+    class _BLOB(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.c_void_p)]
+
+    buf = ctypes.create_string_buffer(data, len(data))
+    blob_in = _BLOB(len(data), ctypes.cast(buf, ctypes.c_void_p))
+    blob_out = _BLOB()
+    ok = ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(blob_in), None, None, None, None,
+        _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out),
+    )
+    if not ok:
+        raise OSError(f"CryptProtectData failed (GetLastError={ctypes.GetLastError()})")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(blob_out.pbData))
+
+
+def _dpapi_unprotect(data: bytes) -> bytes:
+    import ctypes
+
+    # Same c_void_p rule as _dpapi_protect (see the comment there).
+    class _BLOB(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.c_void_p)]
+
+    buf = ctypes.create_string_buffer(data, len(data))
+    blob_in = _BLOB(len(data), ctypes.cast(buf, ctypes.c_void_p))
+    blob_out = _BLOB()
+    ok = ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(blob_in), None, None, None, None,
+        _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out),
+    )
+    if not ok:
+        raise OSError(f"CryptUnprotectData failed (GetLastError={ctypes.GetLastError()})")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(blob_out.pbData))
+
+
+def encrypt_secret(value: str) -> str:
+    """Return a storage-safe string for a secret.
+
+    Windows: "dpapi:<base64>" (already-encrypted values pass through).
+    Other OSes: the value unchanged (plaintext, file is chmod'ed 0600).
+    Failure falls back to plaintext rather than losing the secret.
+    """
+    if not value:
+        return value
+    if value.startswith(_DPAPI_PREFIX):
+        return value  # already encrypted
+    if os.name != "nt":
+        return value
+    try:
+        import base64
+
+        raw = _dpapi_protect(value.encode("utf-8"))
+        return _DPAPI_PREFIX + base64.b64encode(raw).decode("ascii")
+    except Exception as e:
+        log.warning("Could not DPAPI-encrypt secret (%s); storing plaintext", e)
+        return value
+
+
+def decrypt_secret(value: str) -> str:
+    """Inverse of encrypt_secret. Values without the dpapi: prefix pass
+    through unchanged. Undecryptable values (other machine/user/platform)
+    return "" -- better an unusable token than ciphertext sent as a token."""
+    if not value or not value.startswith(_DPAPI_PREFIX):
+        return value
+    if os.name != "nt":
+        log.warning("DPAPI secret cannot be decrypted on this platform")
+        return ""
+    try:
+        import base64
+
+        raw = _dpapi_unprotect(base64.b64decode(value[len(_DPAPI_PREFIX):]))
+        return raw.decode("utf-8")
+    except Exception as e:
+        log.warning("Could not DPAPI-decrypt secret (%s)", e)
+        return ""
+
+
+def harden_config_perms(path: Path) -> None:
+    """Best-effort 0600 on POSIX so plaintext secrets are not world-readable.
+    No-op on Windows (DPAPI protects the values instead)."""
+    if os.name == "nt":
+        return
+    try:
+        os.chmod(path, 0o600)
+    except Exception as e:
+        log.warning("Could not chmod 600 %s: %s", path, e)
+
 # Default hosted worker URL (users can override or self-host)
 DEFAULT_WORKER_URL = "https://battery-relay.sthidontknow.workers.dev"
 
@@ -175,4 +288,41 @@ class Config:
                     log.warning("Config field '%s' value %r invalid (%s), keeping default", k, v, e)
         
         cfg.proxy_url = sanitize_proxy_url(cfg.proxy_url)
+
+        # Secrets may be stored as "dpapi:<base64>"; decrypt transparently.
+        for f in SECRET_FIELDS:
+            val = getattr(cfg, f, "")
+            if isinstance(val, str) and val.startswith(_DPAPI_PREFIX):
+                setattr(cfg, f, decrypt_secret(val))
+
+        # One-time, best-effort upgrade: plaintext secrets still in the file
+        # get rewritten encrypted (Windows only; on other OSes the file is
+        # chmod'ed instead). Never crashes a command over housekeeping.
+        try:
+            _upgrade_plaintext_secrets(path)
+        except Exception as e:
+            log.debug("Secret upgrade skipped: %s", e)
+
         return cfg
+
+
+def _upgrade_plaintext_secrets(path: Path) -> None:
+    """Rewrite plaintext worker_token/admin_key in config.toml as
+    DPAPI-encrypted values (idempotent: a second load finds nothing to do)."""
+    if os.name != "nt" or not path.exists():
+        return
+    import tomlkit
+
+    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    table = doc.get("battery_notifier")
+    if not isinstance(table, dict):
+        return
+    changed = False
+    for f in SECRET_FIELDS:
+        val = table.get(f)
+        if isinstance(val, str) and val and not val.startswith(_DPAPI_PREFIX):
+            table[f] = encrypt_secret(val)
+            changed = True
+    if changed:
+        path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+        log.info("Upgraded plaintext secrets in %s to DPAPI-encrypted values", path)

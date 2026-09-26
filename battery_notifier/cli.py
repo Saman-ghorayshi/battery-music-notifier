@@ -17,21 +17,50 @@ log = logging.getLogger(__name__)
 
 def _save_worker_token(token: str) -> None:
     try:
+        from .config import encrypt_secret, harden_config_perms
+
         cfg_path = APP_DIR / "config.toml"
         if not cfg_path.exists(): return
         content = cfg_path.read_text()
+        # Store encrypted (dpapi:<base64> on Windows). Base64 contains no
+        # quotes/backslashes, which also keeps the regex rewrite below safe.
+        stored = encrypt_secret(token)
         # Bug #1 Fix: Use lambda to prevent regex injection from token backslashes
         if 'worker_token' in content:
             content = re.sub(
                 r'worker_token\s*=\s*"[^"]*"',
-                lambda m: f'worker_token = "{token}"',
+                lambda m: f'worker_token = "{stored}"',
                 content,
             )
         else:
-            content += f'\nworker_token = "{token}"\n'
+            content += f'\nworker_token = "{stored}"\n'
         cfg_path.write_text(content)
+        harden_config_perms(cfg_path)
     except Exception as e:
         log.warning("Failed to save worker token: %s", e)
+
+
+def _relay_episode_should_play(last_episode, alert_active, alert_ts, alert_type):
+    """Pure episode-transition logic for the relay loop.
+
+    An alert EPISODE is identified by (alert_ts, alert_type). The sound must
+    play exactly once per episode: the 5-minute safety valve may silence the
+    speaker, but as long as the episode tuple is unchanged the same alert must
+    never replay (old bug: the valve reset a boolean, re-triggering the same
+    alert every 5 minutes).
+
+    Returns (should_play, episode_to_remember).
+    """
+    episode = (alert_ts, alert_type)
+    if alert_active and episode != last_episode:
+        return True, episode
+    return False, last_episode
+
+
+def _alert_annoying(alert_type) -> bool:
+    """THIEF = someone is taking it: loop the siren. BATTERY = a heads-up
+    about the phone's charge: one song is the message."""
+    return alert_type == "THIEF_ALERT"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -355,6 +384,13 @@ def main(argv=None) -> int:
         # Numeric values (int/float) are written bare.
         def esc(s): return s.replace("\\", "\\\\").replace('"', '\\"')
 
+        # Secrets are stored encrypted where the platform supports it
+        # (dpapi:<base64> on Windows; plaintext + chmod 0600 elsewhere).
+        from .config import encrypt_secret, harden_config_perms
+
+        worker_token_store = esc(encrypt_secret(worker_token))
+        admin_key_store = esc(encrypt_secret(admin_key))
+
         target.write_text(
             f'''[battery_notifier]
 music_files = ["{esc(music_path)}"]
@@ -379,8 +415,8 @@ email_receiver = "{esc(email_receiver)}"
 
 # Worker Relay
 worker_url = "{esc(worker_url)}"
-worker_token = "{esc(worker_token)}"
-admin_key = "{esc(admin_key)}"
+worker_token = "{worker_token_store}"
+admin_key = "{admin_key_store}"
 
 # Thief Catcher Alarm
 alarm_files = ["{esc(alarm_path)}"]
@@ -389,6 +425,7 @@ alarm_files = ["{esc(alarm_path)}"]
 socket_secret = "{esc(socket_secret)}"
 '''
         )
+        harden_config_perms(target)
         print(f"\n Config successfully written to {target}")
 
         if enable_auto:
@@ -804,106 +841,202 @@ socket_secret = "{esc(socket_secret)}"
         setup_logging(args.verbose, cfg.log_file)
         from .worker_client import WorkerClient
         from .player import Player
+        from .battery import Battery
+        from . import guardlock
         import time as _time
 
         if not cfg.worker_url:
             print("  [ERROR] No worker_url configured. Run 'battery-music init' first.")
             return 2
 
-        env = detect_environment()
-        print("=" * 50)
-        print("  Relay Listener (Laptop Side)")
-        print("=" * 50)
-        print(f"  Environment: {env.platform_name}")
-        print(f"  Worker: {cfg.worker_url}")
-        print(f"  Polling every {cfg.poll_interval}s for alerts...")
-        print("  Press Ctrl+C to stop.\n")
+        # Single instance: the Startup-autostart relay listener plus a manual
+        # run must not both poll and both scream.
+        relay_lock = None
+        try:
+            relay_lock = guardlock.acquire(APP_DIR, guardlock.LOCK_RELAY)
+        except Exception as e:
+            log.warning("Could not create relay lock: %s", e)
+        if relay_lock is None:
+            print("  [ERROR] A relay listener is already running on this machine.")
+            print(f"  Stop it first, or delete the stale lock file:")
+            print(f"    {APP_DIR / guardlock.LOCK_RELAY}")
+            return 0
 
-        worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
-        if not cfg.worker_token:
-            print("  No token. Registering...")
-            token = worker.register(device_name=env.platform_name, platform=env.platform_name)
-            if token:
-                print(f"  Registered! Token: {token[:8]}...")
-                cfg.worker_token = token
-                _save_worker_token(token)
-            else:
-                print("  [ERROR] Registration failed.")
-                return 1
+        try:
+            player = None
+            env = detect_environment()
+            print("=" * 50)
+            print("  Relay Listener (Laptop Side)")
+            print("=" * 50)
+            print(f"  Environment: {env.platform_name}")
+            print(f"  Worker: {cfg.worker_url}")
+            print(f"  Polling every {cfg.poll_interval}s for alerts...")
+            print("  Press Ctrl+C to stop.\n")
 
-        alarm_files = cfg.alarm_files if cfg.alarm_files else cfg.music_files
-        if not alarm_files:
-            print("  [ERROR] No alarm sound configured. Run 'battery-music init' first.")
-            return 2
-
-        player = Player(alarm_files, cfg.volume, annoying=True)
-        last_alert_active = False
-        alert_started = 0.0
-        consecutive_errors = 0
-
-        while True:
-            try:
-                resp = worker.poll()
-                consecutive_errors = 0
-                if not resp.get("ok"):
-                    error = resp.get("error", "unknown")
-                    if error == "unauthorized":
-                        print("  [ERROR] Worker rejected token. Re-registering...")
-                        token = worker.register(device_name=env.platform_name, platform=env.platform_name)
-                        if token:
-                            print(f"  Re-registered. New token: {token[:8]}...")
-                            cfg.worker_token = token
-                            _save_worker_token(token)
-                        else:
-                            print("  [ERROR] Re-registration failed. Check worker URL and network.")
-                    elif error == "banned":
-                        print("  [ERROR] Device is banned by admin. Contact admin to resolve.")
-                        break
-                    else:
-                        print(f"  [WARN] Worker poll error: {error}")
+            worker = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)
+            if not cfg.worker_token:
+                print("  No token. Registering...")
+                token = worker.register(device_name=env.platform_name, platform=env.platform_name)
+                if token:
+                    print(f"  Registered! Token: {token[:8]}...")
+                    cfg.worker_token = token
+                    _save_worker_token(token)
                 else:
-                    alert_active = resp.get("alert_active", 0)
-                    alert_type = resp.get("alert_type", "")
-                    battery_pct = resp.get("battery_pct", -1)
-                    is_charging = resp.get("is_charging", 0)
+                    print("  [ERROR] Registration failed.")
+                    return 1
 
-                    if alert_active and not last_alert_active:
-                        print(f"  [{_time.strftime('%H:%M:%S')}] ALERT: {alert_type} (battery={battery_pct}%, charging={is_charging})")
-                        # THIEF = someone is taking it: loop the siren.
-                        # BATTERY = a heads-up about the phone's charge: one
-                        # song is the message; five looping minutes in a
-                        # quiet library is a scene.
-                        player.annoying = (alert_type == "THIEF_ALERT")
-                        player.play()
-                        alert_started = _time.time()
-                        last_alert_active = True
-                    elif not alert_active and last_alert_active:
-                        print(f"  [{_time.strftime('%H:%M:%S')}] Alert cleared.")
-                        player.stop()
-                        last_alert_active = False
+            alarm_files = cfg.alarm_files if cfg.alarm_files else cfg.music_files
+            if not alarm_files:
+                print("  [ERROR] No alarm sound configured. Run 'battery-music init' first.")
+                return 2
 
-                    # Unattended-laptop safety valve: an alert nobody clears
-                    # (test left running, owner away) must not beep all day.
-                    # The relayed alert state stays active; only the local
-                    # sound auto-stops -- the phone keeps its own siren.
-                    if last_alert_active and _time.time() - alert_started > 300:
-                        print(f"  [{_time.strftime('%H:%M:%S')}] Local siren auto-stopped after 5 min (alert still active).")
-                        player.stop()
-                        last_alert_active = False
-            except KeyboardInterrupt:
-                print("\n  Stopping relay listener...")
-                player.stop()
-                break
-            except Exception as e:
-                consecutive_errors += 1
-                log.error("Relay poll error: %s", e)
-                if consecutive_errors <= 3:
-                    print(f"  [WARN] Connection error ({consecutive_errors}): {e}")
-                elif consecutive_errors == 10:
-                    print("  [ERROR] Worker unreachable after 10 attempts. Check network and worker URL.")
-                    print("  Continuing to retry every 2s...")
+            player = Player(alarm_files, cfg.volume, annoying=True)
+            # Alert EPISODE tracking: the sound plays once per
+            # (alert_ts, alert_type); see _relay_episode_should_play.
+            last_episode = None
+            sound_active = False
+            sound_started = 0.0
+            consecutive_errors = 0
 
-            _time.sleep(cfg.poll_interval)  # Bug #4 Fix: Respect config
+            # Charger-watch state (active only while the ACCOUNT is armed):
+            # the boot-autostart relay listener doubles as a full laptop
+            # guardian even when the user only armed from their phone.
+            watch_prev_charging = None   # last local charging reading while armed
+            watch_fired = False          # already fired for this armed episode
+            watch_charging_since = None  # when charging returned (60s reset rule)
+            watch_sound = False          # current siren was started by charger-watch
+
+            while True:
+                try:
+                    resp = worker.poll()
+                    consecutive_errors = 0
+                    if not resp.get("ok"):
+                        error = resp.get("error", "unknown")
+                        if error == "unauthorized":
+                            print("  [ERROR] Worker rejected token. Re-registering...")
+                            token = worker.register(device_name=env.platform_name, platform=env.platform_name)
+                            if token:
+                                print(f"  Re-registered. New token: {token[:8]}...")
+                                cfg.worker_token = token
+                                _save_worker_token(token)
+                            else:
+                                print("  [ERROR] Re-registration failed. Check worker URL and network.")
+                        elif error == "banned":
+                            print("  [ERROR] Device is banned by admin. Contact admin to resolve.")
+                            break
+                        else:
+                            print(f"  [WARN] Worker poll error: {error}")
+                    else:
+                        alert_active = resp.get("alert_active", 0)
+                        alert_type = resp.get("alert_type", "")
+                        alert_ts = resp.get("alert_ts", 0)
+                        battery_pct = resp.get("battery_pct", -1)
+                        is_charging = resp.get("is_charging", 0)
+
+                        # Episode logic: play once per (alert_ts, alert_type).
+                        # The 5-min valve stops the SOUND but never resets the
+                        # episode, so a stuck alert cannot replay itself.
+                        should_play, last_episode = _relay_episode_should_play(
+                            last_episode, alert_active, alert_ts, alert_type)
+                        if should_play:
+                            if (alert_type == "THIEF_ALERT"
+                                    and guardlock.is_locked(APP_DIR, guardlock.LOCK_THIEF)):
+                                # A local ThiefCatcher is the alarm source for
+                                # THIEF episodes and already screams; the relay
+                                # listener tracks the episode silently.
+                                print(f"  [{_time.strftime('%H:%M:%S')}] THIEF alert active -- local ThiefCatcher is the alarm source, staying silent.")
+                            else:
+                                print(f"  [{_time.strftime('%H:%M:%S')}] ALERT: {alert_type} (battery={battery_pct}%, charging={is_charging})")
+                                # THIEF = loop the siren; BATTERY = one song.
+                                player.annoying = _alert_annoying(alert_type)
+                                player.play()
+                                sound_started = _time.time()
+                                sound_active = True
+                        elif not alert_active and sound_active:
+                            print(f"  [{_time.strftime('%H:%M:%S')}] Alert cleared.")
+                            player.stop()
+                            sound_active = False
+
+                        # Unattended-laptop safety valve: an alert nobody clears
+                        # (test left running, owner away) must not beep all day.
+                        # The relayed alert state stays active; only the local
+                        # sound auto-stops -- the phone keeps its own siren.
+                        if sound_active and _time.time() - sound_started > 300:
+                            print(f"  [{_time.strftime('%H:%M:%S')}] Local siren auto-stopped after 5 min (alert still active).")
+                            player.stop()
+                            sound_active = False
+
+                        # ── Charger-watch while the account is armed ──
+                        # Every statement guarded: the polling loop must not die.
+                        try:
+                            armed = bool(resp.get("armed", False))
+                            if armed:
+                                charging = bool(Battery().read().charging)
+                                if (watch_prev_charging is True and not charging
+                                        and not watch_fired
+                                        and not guardlock.is_locked(APP_DIR, guardlock.LOCK_THIEF)):
+                                    # A local ThiefCatcher (if running) owns unplug
+                                    # alarms; otherwise confirm with a second read
+                                    # 3s later to dodge power hiccups before firing.
+                                    _time.sleep(3)
+                                    confirm = Battery().read()
+                                    if not confirm.charging:
+                                        watch_fired = True
+                                        watch_sound = True
+                                        watch_charging_since = None
+                                        print(f"  [{_time.strftime('%H:%M:%S')}] [CHARGER-WATCH] Charger lost while account armed -- THIEF_ALERT (battery={confirm.percentage}%).")
+                                        worker.send_alert(
+                                            alert_type="THIEF_ALERT",
+                                            battery_pct=confirm.percentage,
+                                            is_charging=False,
+                                        )
+                                        player.annoying = True
+                                        player.play()
+                                        sound_active = True
+                                        sound_started = _time.time()
+                                if charging:
+                                    if watch_charging_since is None:
+                                        watch_charging_since = _time.time()
+                                        if watch_fired:
+                                            print(f"  [{_time.strftime('%H:%M:%S')}] [CHARGER-WATCH] Charger returned -- stopping local siren (the relay alert itself needs a pass/key to clear).")
+                                            if watch_sound:
+                                                player.stop()
+                                                sound_active = False
+                                                watch_sound = False
+                                    elif watch_fired and _time.time() - watch_charging_since >= 60:
+                                        print(f"  [{_time.strftime('%H:%M:%S')}] [CHARGER-WATCH] Charging stable for 60s -- watch re-armed.")
+                                        watch_fired = False
+                                else:
+                                    watch_charging_since = None
+                                watch_prev_charging = charging
+                            else:
+                                # Account disarmed: reset the charger-watch.
+                                watch_prev_charging = None
+                                watch_fired = False
+                                watch_charging_since = None
+                        except Exception as e:
+                            log.warning("Charger-watch error: %s", e)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    consecutive_errors += 1
+                    log.error("Relay poll error: %s", e)
+                    if consecutive_errors <= 3:
+                        print(f"  [WARN] Connection error ({consecutive_errors}): {e}")
+                    elif consecutive_errors == 10:
+                        print("  [ERROR] Worker unreachable after 10 attempts. Check network and worker URL.")
+                        print("  Continuing to retry every 2s...")
+
+                _time.sleep(cfg.poll_interval)  # Bug #4 Fix: Respect config
+        except KeyboardInterrupt:
+            print("\n  Stopping relay listener...")
+        finally:
+            try:
+                if player:
+                    player.stop()
+            except Exception:
+                pass
+            guardlock.release(relay_lock)
         return 0
 
     # admin: admin actions

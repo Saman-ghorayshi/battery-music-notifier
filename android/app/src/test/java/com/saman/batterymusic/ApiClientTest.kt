@@ -253,4 +253,43 @@ class DisarmKeyTest {
         assertFalse(state.hasKey)
         server.shutdown()
     }
+
+    @Test
+    fun poll_parses_other_devices_and_alert_ts() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"alert_active":1,"alert_type":"THIEF_ALERT","alert_ts":1790431757,
+                    "battery_pct":50,"is_charging":0,"snapshot_id":null,"armed":1,
+                    "has_pass":true,"has_key":false,
+                    "other_devices":[{"name":"Windows","platform":"Windows","last_seen":1790431760},
+                                     {"name":null,"platform":null,"last_seen":1790431000}]}"""
+            )
+        )
+        server.start()
+        val state = client(server).poll()!!
+        assertEquals(1790431757L, state.alertTs)
+        assertEquals(2, state.otherDevices.size)
+        assertEquals("Windows", state.otherDevices[0].name)
+        assertEquals(1790431760L, state.otherDevices[0].lastSeen)
+        assertNull(state.otherDevices[1].name)
+        server.shutdown()
+    }
+
+    @Test
+    fun poll_tolerates_missing_other_devices_field() {
+        // Older deployed workers do not send other_devices at all.
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"alert_active":0,"alert_type":"","alert_ts":5,
+                    "battery_pct":50,"is_charging":0,"snapshot_id":null,"armed":0}"""
+            )
+        )
+        server.start()
+        val state = client(server).poll()!!
+        assertTrue(state.otherDevices.isEmpty())
+        assertEquals(5L, state.alertTs)
+        server.shutdown()
+    }
 }

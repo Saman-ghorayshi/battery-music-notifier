@@ -76,10 +76,41 @@ object Notifications {
         getManager(context).cancel(THIEF_ALERT_NOTIFICATION_ID)
     }
 
+    /** Heads-up + siren companion when the laptop's heartbeat goes stale while armed. */
+    fun showOtherSilent(context: Context, deviceName: String) {
+        createChannels(context)
+        val silence = PendingIntent.getBroadcast(
+            context, 2,
+            Intent(context, AlertActionReceiver::class.java).setAction(ACTION_SILENCE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val open = PendingIntent.getActivity(
+            context, 0,
+            Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_ALERT)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("LAPTOP WENT SILENT")
+            .setContentText("$deviceName stopped checking in -- asleep, crashed, or taken.")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setOngoing(true)
+            .addAction(0, "Silence", silence)
+            .setContentIntent(open)
+            .build()
+        getManager(context).notify(OTHER_SILENT_NOTIFICATION_ID, notification)
+    }
+
+    fun cancelOtherSilent(context: Context) {
+        getManager(context).cancel(OTHER_SILENT_NOTIFICATION_ID)
+    }
+
     private fun getManager(context: Context) =
         context.getSystemService(NotificationManager::class.java)
 
     const val ACTION_SILENCE = "com.saman.batterymusic.SILENCE"
     const val THIEF_ALERT_NOTIFICATION_ID = 2
     const val REMOTE_ARMED_NOTIFICATION_ID = 3
+    const val OTHER_SILENT_NOTIFICATION_ID = 4
 }

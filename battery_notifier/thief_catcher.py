@@ -172,6 +172,7 @@ class ThiefCatcher:
         self._armed = False
         self._alert_active = False
         self._keepawake = KeepAwake()
+        self._thief_lock = None  # guardlock thief.lock, held while armed
 
     def arm(self, mode: str = "both", verbose: bool = True, force: bool = False) -> None:
         """Start monitoring for charger unplug.
@@ -200,6 +201,20 @@ class ThiefCatcher:
         self._armed = True
         self._alert_active = False
         self._mode = mode  # Remember mode for _disarm cleanup
+
+        # Hold thief.lock for the whole armed period: the relay listener
+        # reads it every poll and stays silent for THIEF episodes while we
+        # are the alarm source (no overlapping sirens on one laptop).
+        try:
+            from . import guardlock
+            from .config import APP_DIR
+            self._thief_lock = guardlock.acquire(APP_DIR, guardlock.LOCK_THIEF)
+            if self._thief_lock is None and verbose:
+                print("  [WARN] Another ThiefCatcher holds thief.lock; arming anyway (relay will stay silent for THIEF alerts).")
+        except Exception as e:
+            log.warning("thief.lock acquire failed: %s", e)
+            self._thief_lock = None
+
         self._keepawake.acquire(verbose)
 
         # Remember the state at arm time so we can detect unplug-during-grace
@@ -275,8 +290,10 @@ class ThiefCatcher:
         if verbose:
             print(f"\n  !!! CHARGER UNPLUGGED !!! Battery: {battery_pct}%")
 
-        if mode in ("local", "both"):
-            if self.player: self.player.play()
+        # ALWAYS play locally, in every mode: this machine is the one being
+        # carried away, so the stolen machine must scream even in relay mode
+        # where the "official" alarm is expected from another device.
+        if self.player: self.player.play()
 
         if mode == "telegram":
             self._send_telegram_alert("THIEF_ALERT", verbose)
@@ -297,15 +314,29 @@ class ThiefCatcher:
 
     def _stop_alert(self, mode: str) -> None:
         """Stop the alarm."""
-        if mode in ("local", "both"):
-            if self.player:
-                self.player.stop()
+        # Local siren stops on every mode: _trigger_alert now plays locally
+        # in every mode too, so there is always a local sound to stop.
+        if self.player:
+            self.player.stop()
 
         if mode == "telegram":
             self._send_telegram_alert("THIEF_STOP", verbose=False)
 
         if mode in ("relay", "both") and self.worker:
-            self.worker.clear_alert()
+            try:
+                ok = self.worker.clear_alert()
+                if not ok:
+                    # Expected with the new backend: the worker rejects
+                    # THIEF-clear by the origin token (403 origin_cannot_clear)
+                    # so a thief re-plugging cannot silence the fleet. Never
+                    # crash, never retry-loop; the owner disarms with pass/key.
+                    log.warning(
+                        "Worker did not clear the relay alert "
+                        "(likely 403 origin_cannot_clear); it stays active "
+                        "until pass/key disarm."
+                    )
+            except Exception as e:
+                log.warning("clear_alert call failed (%s); ignoring", e)
 
         if mode in ("relay", "both"):
             self._send_local_socket("THIEF_STOP")
@@ -358,9 +389,22 @@ class ThiefCatcher:
             if self.player:
                 self.player.stop()
             if self.worker:
-                self.worker.clear_alert()
+                try:
+                    self.worker.clear_alert()
+                except Exception as e:
+                    log.warning("clear_alert during disarm failed (%s); ignoring", e)
         self._armed = False
         self._alert_active = False
+        # Release thief.lock LAST: from now on the relay listener is free to
+        # become the alarm source again.
+        try:
+            if self._thief_lock:
+                from . import guardlock
+                guardlock.release(self._thief_lock)
+        except Exception as e:
+            log.warning("thief.lock release failed: %s", e)
+        finally:
+            self._thief_lock = None
 
     @property
     def is_armed(self) -> bool:
