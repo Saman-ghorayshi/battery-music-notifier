@@ -29,7 +29,16 @@ class ArmService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(Notifications.ARMED_NOTIFICATION_ID, Notifications.armedNotification(this))
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            startForeground(
+                Notifications.ARMED_NOTIFICATION_ID, Notifications.armedNotification(this),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            startForeground(Notifications.ARMED_NOTIFICATION_ID, Notifications.armedNotification(this))
+        }
         startWatching()
         // Not START_STICKY: if the system kills us the armed flag survives in
         // Prefs and the next unplug still fires PowerReceiver -> ThiefWorker.
@@ -41,6 +50,28 @@ class ArmService : Service() {
         watching = true
         val prefs = Prefs.get(this)
         thread(name = "relay-watch") {
+
+        // ── Thief selfie ────────────────────────────────────────────────
+        // The alarm ringing means someone may be holding this phone. One
+        // front-camera frame, uploaded to the owner's own relay account so
+        // it shows up next to the alert. Camera permission is asked once,
+        // up front, with the explanation; without it this silently skips.
+        val selfieTakenFor = java.util.concurrent.atomic.AtomicLong(0L)
+        fun takeThiefSelfie(alertTs: Long) {
+            if (selfieTakenFor.get() == alertTs) return
+            selfieTakenFor.set(alertTs)
+            val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.CAMERA,
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) return
+            ThiefCamera.captureSelfie(this) { bytes ->
+                if (bytes != null) {
+                    try { prefs.newClient().uploadSnapshot(bytes) } catch (_: Exception) {}
+                }
+            }
+        }
+        // ────────────────────────────────────────────────────────────────
+
             // Dead-man bookkeeping: when the other device was last FRESH and
             // what it calls itself, so a laptop that stops checking in while
             // armed raises "LAPTOP WENT SILENT" exactly once per silence
@@ -87,6 +118,7 @@ class ArmService : Service() {
                         ringing = true
                         SirenPlayer.start(this)
                     }
+                    takeThiefSelfie(state?.alertTs ?: 0L)
                     Notifications.showThiefAlert(this)
                 } else if (!wantThief && thiefRinging) {
                     thiefRinging = false
@@ -126,6 +158,7 @@ class ArmService : Service() {
                         otherSilent = true
                         otherSilentSince = other.lastSeen
                         otherSilentName = otherName ?: other.name
+                        takeThiefSelfie(0L - other.lastSeen)
                         if (!thiefRinging) {
                             ringing = true
                             SirenPlayer.start(this)

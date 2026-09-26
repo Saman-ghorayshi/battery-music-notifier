@@ -144,6 +144,14 @@ class ApiClient(
         }
     }
 
+    /** Upload a JPEG/PNG snapshot (the thief selfie). Returns the snap_id. */
+    fun uploadSnapshot(image: ByteArray): ApiResult {
+        val b64 = java.util.Base64.getEncoder().encodeToString(image)
+        val resp = post("/api/snapshot", JSONObject().put("image", b64))
+        return ApiResult(resp.optBoolean("ok"), resp.optString("error", "").ifEmpty { null },
+            if (resp.has("snap_id")) resp.optLong("snap_id").toString() else null)
+    }
+
     /** Download a snapshot's bytes, or null. Caller checks JPEG/PNG magic. */
     fun fetchSnapshot(snapshotId: Long): ByteArray? {
         return try {

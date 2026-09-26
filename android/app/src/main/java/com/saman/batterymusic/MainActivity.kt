@@ -29,6 +29,7 @@ class MainActivity : FragmentActivity() {
 
     private lateinit var prefs: Prefs
     private var paired by mutableStateOf(false)
+    private var onboarded by mutableStateOf(false)
     private var darkTheme by mutableStateOf(true)
     private var wave by mutableStateOf<WaveCapture?>(null)
 
@@ -100,6 +101,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs.get(this)
         paired = prefs.hasToken()
+        onboarded = prefs.onboardingDone
         darkTheme = prefs.darkMode
         if (Build.VERSION.SDK_INT >= 33) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -110,15 +112,20 @@ class MainActivity : FragmentActivity() {
         setContent {
             MaterialTheme(colorScheme = if (darkTheme) DarkScheme else LightScheme) {
                 Surface(Modifier.fillMaxSize()) {
-                    if (paired) {
-                        DashScreen(
+                    when {
+                        // First launch: the permission walkthrough, asked once,
+                        // with the honest reason each permission exists.
+                        !onboarded -> OnboardingScreen(prefs, onDone = {
+                            prefs.onboardingDone = true
+                            onboarded = true
+                        })
+                        paired -> DashScreen(
                             prefs,
                             darkTheme = darkTheme,
                             onUnpaired = { paired = false },
                             onToggleTheme = ::toggleTheme,
                         )
-                    } else {
-                        PairScreen(
+                        else -> PairScreen(
                             prefs,
                             onPaired = {
                                 // First pairing happens after onCreate: schedule the

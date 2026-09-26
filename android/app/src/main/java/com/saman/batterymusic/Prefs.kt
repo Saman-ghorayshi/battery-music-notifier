@@ -35,6 +35,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_DARK, true)
         set(value) = sp.edit().putBoolean(KEY_DARK, value).apply()
 
+    /** The permission onboarding walkthrough has been completed once. */
+    var onboardingDone: Boolean
+        get() = sp.getBoolean(KEY_ONBOARDED, false)
+        set(value) = sp.edit().putBoolean(KEY_ONBOARDED, value).apply()
+
     fun hasToken(): Boolean = token.isNotEmpty()
 
     /** Build.MODEL, e.g. "2201117SG" -- self-identifies this phone to the relay. */
@@ -52,6 +57,7 @@ class Prefs(context: Context) {
         private const val KEY_TOKEN = "linked_token"
         private const val KEY_ARMED = "armed"
         private const val KEY_DARK = "dark_mode"
+        private const val KEY_ONBOARDED = "onboarding_done"
 
         @Volatile private var instance: Prefs? = null
 
