@@ -32,8 +32,17 @@ data class PollState(
  * HTTP client for the battery relay. Pure JVM on purpose: no android.* imports,
  * so the JVM unit tests and the PhoneSim runner drive the exact code that
  * ships in the APK. One instance per process; OkHttp pools connections.
+ *
+ * [deviceName]/[devicePlatform] self-identify this device on every heartbeat
+ * (X-Device-Name / X-Device-Platform) so the relay's device registry shows
+ * real names -- a paired phone must not stay labeled like the laptop.
  */
-class ApiClient(private val workerUrl: String, private var token: String) {
+class ApiClient(
+    private val workerUrl: String,
+    private var token: String,
+    private val deviceName: String? = null,
+    private val devicePlatform: String? = null,
+) {
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
@@ -42,10 +51,17 @@ class ApiClient(private val workerUrl: String, private var token: String) {
 
     fun currentToken(): String = token
 
+    private fun Request.Builder.withIdentity(): Request.Builder {
+        if (!deviceName.isNullOrEmpty()) header("X-Device-Name", deviceName)
+        if (!devicePlatform.isNullOrEmpty()) header("X-Device-Platform", devicePlatform)
+        return this
+    }
+
     private fun post(path: String, body: JSONObject): JSONObject {
         val request = Request.Builder()
             .url(workerUrl.trimEnd('/') + path)
             .header("Authorization", "Bearer $token")
+            .withIdentity()
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         return execute(request)
@@ -55,6 +71,7 @@ class ApiClient(private val workerUrl: String, private var token: String) {
         val request = Request.Builder()
             .url(workerUrl.trimEnd('/') + path)
             .header("Authorization", "Bearer $token")
+            .withIdentity()
             .get()
             .build()
         return http.newCall(request).execute()
@@ -75,7 +92,10 @@ class ApiClient(private val workerUrl: String, private var token: String) {
         if (!code.matches(Regex("\\d{6}"))) {
             return ApiResult(false, "invalid_code")
         }
-        val resp = post("/api/pair/link", JSONObject().put("code", code))
+        val body = JSONObject().put("code", code)
+        if (!deviceName.isNullOrEmpty()) body.put("device_name", deviceName)
+        if (!devicePlatform.isNullOrEmpty()) body.put("device_platform", devicePlatform)
+        val resp = post("/api/pair/link", body)
         val newToken = resp.optString("token", "")
         if (resp.optBoolean("ok") && newToken.isNotEmpty()) {
             token = newToken

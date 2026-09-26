@@ -37,7 +37,15 @@ class Prefs(context: Context) {
 
     fun hasToken(): Boolean = token.isNotEmpty()
 
-    fun newClient(): ApiClient = ApiClient(workerUrl, token)
+    /** Build.MODEL, e.g. "2201117SG" -- self-identifies this phone to the relay. */
+    fun deviceIdentity(): Pair<String, String> =
+        "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim() to
+            "Android ${android.os.Build.VERSION.RELEASE}"
+
+    fun newClient(): ApiClient {
+        val (name, platform) = deviceIdentity()
+        return ApiClient(workerUrl, token, deviceName = name, devicePlatform = platform)
+    }
 
     companion object {
         private const val KEY_WORKER = "worker_url"

@@ -224,16 +224,37 @@ async function presentedTokenHash(request) {
 // v2.5 device heartbeat: one devices row per presenting token hash, so poll
 // can list which of the account's other devices are still alive. Best-effort:
 // a heartbeat failure must never break the main flow -- log and continue.
-async function touchDevice(db, userId, tokenHash, name, platform) {
+// updateName: when the client self-reports a name (X-Device-Name header or a
+// pair/link body), the row adopts it -- a phone paired under the account's
+// name should not stay labeled "Windows" forever.
+async function touchDevice(db, userId, tokenHash, name, platform, updateName = false) {
   if (!tokenHash) return;
   try {
-    await db.prepare(
-      "INSERT INTO devices (user_id, token_hash, name, platform, last_seen) VALUES (?, ?, ?, ?, ?) " +
-      "ON CONFLICT(token_hash) DO UPDATE SET last_seen = excluded.last_seen"
-    ).bind(userId, tokenHash, name || "", platform || "", now()).run();
+    if (updateName && (name || platform)) {
+      await db.prepare(
+        "INSERT INTO devices (user_id, token_hash, name, platform, last_seen) VALUES (?, ?, ?, ?, ?) " +
+        "ON CONFLICT(token_hash) DO UPDATE SET last_seen = excluded.last_seen, " +
+        "name = CASE WHEN excluded.name != '' THEN excluded.name ELSE devices.name END, " +
+        "platform = CASE WHEN excluded.platform != '' THEN excluded.platform ELSE devices.platform END"
+      ).bind(userId, tokenHash, name || "", platform || "", now()).run();
+    } else {
+      await db.prepare(
+        "INSERT INTO devices (user_id, token_hash, name, platform, last_seen) VALUES (?, ?, ?, ?, ?) " +
+        "ON CONFLICT(token_hash) DO UPDATE SET last_seen = excluded.last_seen"
+      ).bind(userId, tokenHash, name || "", platform || "", now()).run();
+    }
   } catch (e) {
     console.error("device heartbeat failed:", e.message);
   }
+}
+
+// Self-reported device identity: clients MAY send X-Device-Name /
+// X-Device-Platform headers with any authenticated call. Truncated like
+// register fields; empty headers fall back to the account row's values.
+function selfReportedIdentity(request, user) {
+  const name = (request.headers.get("X-Device-Name") || user.device_name || "").slice(0, 100);
+  const platform = (request.headers.get("X-Device-Platform") || user.platform || "").slice(0, 50);
+  return { name, platform };
 }
 
 // ---- Admin auth: session key derived from ADMIN_KEY env var ----
@@ -276,14 +297,16 @@ async function handleRegister(request, db, env) {
 
 async function handlePing(request, db, user) {
   const t = now();
-  await touchDevice(db, user.user_id, await presentedTokenHash(request), user.device_name, user.platform);
+  const ident = selfReportedIdentity(request, user);
+  await touchDevice(db, user.user_id, await presentedTokenHash(request), ident.name, ident.platform, true);
   await db.prepare("UPDATE users SET last_seen = ? WHERE user_id = ?").bind(t, user.user_id).run();
   return json({ ok: true, server_time: t });
 }
 
 async function handleSendAlert(request, db, user, env, ctx) {
   const tokenHash = await presentedTokenHash(request);
-  await touchDevice(db, user.user_id, tokenHash, user.device_name, user.platform);
+  const ident = selfReportedIdentity(request, user);
+  await touchDevice(db, user.user_id, tokenHash, ident.name, ident.platform, true);
   const body = await request.json().catch(() => ({}));
   // trim matters: "THIEF_ALERT " with trailing space would otherwise lose
   // its rate-limit bypass and get stored as a different type
@@ -357,7 +380,8 @@ async function handleClearAlert(request, db, user) {
   // bytes stalls the TCP stream (same rule as the router's early returns).
   try { await request.arrayBuffer(); } catch (_) {}
   const tokenHash = await presentedTokenHash(request);
-  await touchDevice(db, user.user_id, tokenHash, user.device_name, user.platform);
+  const ident = selfReportedIdentity(request, user);
+  await touchDevice(db, user.user_id, tokenHash, ident.name, ident.platform, true);
   // v2.5 origin protection: the device that raised the current THIEF_ALERT
   // may not silence it -- a thief holding that device must not stop the
   // alarm. BATTERY alerts and clears from the OTHER paired device stay free.
@@ -375,7 +399,8 @@ async function handlePoll(request, db, user) {
   // User polls their own state (laptop checks if phone sent alert).
   // Latest snapshot rides along so the poller can pull the photo.
   const tokenHash = await presentedTokenHash(request);
-  await touchDevice(db, user.user_id, tokenHash, user.device_name, user.platform);
+  const ident = selfReportedIdentity(request, user);
+  await touchDevice(db, user.user_id, tokenHash, ident.name, ident.platform, true);
   const snap = await db.prepare(
     "SELECT snap_id FROM snapshots WHERE user_id = ? ORDER BY snap_id DESC LIMIT 1"
   ).bind(user.user_id).first();
@@ -992,11 +1017,16 @@ async function handlePairLink(request, db) {
   await db.prepare("UPDATE users SET linked_token = ?, last_seen = ? WHERE user_id = ?")
     .bind(linkedHash, now(), record.user_id).run();
 
-  // The joining phone joins the device registry too (best-effort); name and
-  // platform come from the account row it just paired with.
+  // The joining phone joins the device registry too (best-effort). It MAY
+  // self-report a name (device_name, e.g. its Build.MODEL); without one it
+  // inherits the account row's name, and its next poll heartbeat with the
+  // X-Device-Name header renames the row anyway.
   const owner = await db.prepare("SELECT device_name, platform FROM users WHERE user_id = ?")
     .bind(record.user_id).first();
-  await touchDevice(db, record.user_id, linkedHash, owner?.device_name, owner?.platform);
+  const joinerName = (typeof body.device_name === "string" ? body.device_name : "").slice(0, 100);
+  const joinerPlatform = (typeof body.device_platform === "string" ? body.device_platform : "").slice(0, 50);
+  await touchDevice(db, record.user_id, linkedHash,
+    joinerName || owner?.device_name, joinerPlatform || owner?.platform, true);
 
   // Rare event -> inline increment is free; the code row is already deleted
   // so there is nothing to count retroactively.
