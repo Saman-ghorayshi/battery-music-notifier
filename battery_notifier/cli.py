@@ -869,6 +869,11 @@ socket_secret = "{esc(socket_secret)}"
 
                     if alert_active and not last_alert_active:
                         print(f"  [{_time.strftime('%H:%M:%S')}] ALERT: {alert_type} (battery={battery_pct}%, charging={is_charging})")
+                        # THIEF = someone is taking it: loop the siren.
+                        # BATTERY = a heads-up about the phone's charge: one
+                        # song is the message; five looping minutes in a
+                        # quiet library is a scene.
+                        player.annoying = (alert_type == "THIEF_ALERT")
                         player.play()
                         alert_started = _time.time()
                         last_alert_active = True

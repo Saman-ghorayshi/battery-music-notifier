@@ -1,6 +1,7 @@
 package com.saman.batterymusic
 
 import android.content.Context
+import android.content.Intent
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -52,10 +53,20 @@ class BatteryWorker(context: Context, params: WorkerParameters) : Worker(context
         if (battery < 0) return Result.success()
 
         val low = battery <= 20
-        val charging = state.isCharging
+        // The phone's OWN power state, read fresh: the relay's account-level
+        // is_charging is whatever device pinged last and goes stale (it once
+        // reported "discharging" while this phone was on the charger, which
+        // fired a phantom low-battery alarm on the whole account).
+        val charging = isChargingNow(applicationContext)
+
         when {
             low && !charging && !state.alertActive ->
                 client.sendAlert("BATTERY", battery, charging)
+            // Back on the charger: stand the low-battery alert down right
+            // here -- the next periodic run is 15 minutes away and the
+            // laptop siren shouldn't honk for quarter of an hour.
+            charging && state.alertActive && state.alertType == "BATTERY" ->
+                client.clearAlert()
             !low && state.alertActive && state.alertType == "BATTERY" ->
                 client.clearAlert()
         }
@@ -65,6 +76,18 @@ class BatteryWorker(context: Context, params: WorkerParameters) : Worker(context
     private fun readBatteryPct(context: Context): Int {
         val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
         return bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+    }
+
+    /** True only when THIS phone is actually drawing power right now. */
+    private fun isChargingNow(context: Context): Boolean {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+        val status = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_STATUS) ?: 0
+        if (status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == android.os.BatteryManager.BATTERY_STATUS_FULL
+        ) return true
+        // Fallback: the sticky battery intent's plugged flag.
+        val intent = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        return intent?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0
     }
 }
 

@@ -12,6 +12,10 @@ Arming modes:
   - Telegram: sends THIEF_ALERT via Telegram bot description (cloud only)
 """
 from __future__ import annotations
+import ctypes
+import platform
+import re
+import subprocess
 import time
 import logging
 import threading
@@ -25,6 +29,126 @@ log = logging.getLogger(__name__)
 ARM_GRACE_SECONDS = 3
 # How often to check battery state
 POLL_INTERVAL = 1.0
+
+# Windows lid-close action values (powercfg LIDACTION)
+LID_DO_NOTHING = 0
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+class KeepAwake:
+    """While armed, a sleeping laptop is a blind guard: idle-sleep freezes
+    the watcher, and a thief closing the lid blackouts a screaming alarm.
+    Two layers, both reverted on disarm:
+
+      1. SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) from a
+         dedicated thread -- blocks idle sleep for as long as we run, and
+         the OS clears it automatically if the process dies.
+      2. Lid-close action set to "do nothing" (AC + DC), previous values
+         remembered and restored on disarm.
+    """
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._old_lid: list[int] | None = None
+
+    def acquire(self, verbose: bool = True) -> None:
+        if platform.system() != "Windows":
+            return
+        self._stop.clear()
+
+        def hold() -> None:
+            k32 = ctypes.windll.kernel32
+            k32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+            while not self._stop.wait(30):
+                # Re-assert periodically in case anything reset the state.
+                k32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+            k32.SetThreadExecutionState(ES_CONTINUOUS)
+
+        self._thread = threading.Thread(target=hold, name="thief-keepawake", daemon=True)
+        self._thread.start()
+        self._old_lid = self._set_lid_action(LID_DO_NOTHING)
+        if verbose and self._old_lid is not None:
+            print("  Sleep guard: idle sleep blocked, lid close = do nothing (restored on disarm).")
+
+    def release(self) -> None:
+        if platform.system() != "Windows":
+            return
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+            self._thread = None
+        if self._old_lid is not None:
+            self._restore_lid_action(self._old_lid)
+            self._old_lid = None
+
+    @staticmethod
+    def _lid_guids() -> tuple[str, str]:
+        # SUB_BUTTONS \ LIDACTION
+        return "4f971e89-eebd-4455-a8de-9e59040e7347", "5ca83367-6e45-459f-a27b-476b1d01c936"
+
+    def _query_lid(self) -> list[int] | None:
+        try:
+            sub, setting = self._lid_guids()
+            out = subprocess.run(
+                ["powercfg", "/q", "SCHEME_CURRENT", sub, setting],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            values = re.findall(r"Index:\s*(0x[0-9a-fA-F]+)", out)
+            if len(values) < 2:
+                return None
+            # Last two = Current AC, Current DC
+            return [int(v, 16) for v in values[-2:]]
+        except Exception as e:
+            log.warning("Could not read lid-close action: %s", e)
+            return None
+
+    def _apply_lid(self, value: int) -> bool:
+        try:
+            sub, setting = self._lid_guids()
+            ok = True
+            for flag in ("/setacvalueindex", "/setdcvalueindex"):
+                r = subprocess.run(
+                    ["powercfg", flag, "SCHEME_CURRENT", sub, setting, str(value)],
+                    capture_output=True, text=True, timeout=10,
+                )
+                ok = ok and r.returncode == 0
+            # Make the modified scheme active so the change takes effect.
+            subprocess.run(
+                ["powercfg", "/setactive", "SCHEME_CURRENT"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return ok
+        except Exception as e:
+            log.warning("Could not change lid-close action: %s", e)
+            return False
+
+    def _set_lid_action(self, value: int) -> list[int] | None:
+        old = self._query_lid()
+        if old is None or (old[0] == value and old[1] == value):
+            return None
+        if self._apply_lid(value):
+            return old
+        return None
+
+    def _restore_lid_action(self, old: list[int]) -> None:
+        try:
+            sub, setting = self._lid_guids()
+            subprocess.run(
+                ["powercfg", "/setacvalueindex", "SCHEME_CURRENT", sub, setting, str(old[0])],
+                capture_output=True, text=True, timeout=10,
+            )
+            subprocess.run(
+                ["powercfg", "/setdcvalueindex", "SCHEME_CURRENT", sub, setting, str(old[1])],
+                capture_output=True, text=True, timeout=10,
+            )
+            subprocess.run(
+                ["powercfg", "/setactive", "SCHEME_CURRENT"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception as e:
+            log.warning("Could not restore lid-close action: %s", e)
 
 
 class ThiefCatcher:
@@ -47,6 +171,7 @@ class ThiefCatcher:
         self._stop_event = threading.Event()
         self._armed = False
         self._alert_active = False
+        self._keepawake = KeepAwake()
 
     def arm(self, mode: str = "both", verbose: bool = True, force: bool = False) -> None:
         """Start monitoring for charger unplug.
@@ -75,6 +200,7 @@ class ThiefCatcher:
         self._armed = True
         self._alert_active = False
         self._mode = mode  # Remember mode for _disarm cleanup
+        self._keepawake.acquire(verbose)
 
         # Remember the state at arm time so we can detect unplug-during-grace
         was_charging_at_arm = info.charging
@@ -222,6 +348,7 @@ class ThiefCatcher:
 
     def _disarm(self) -> None:
         """Disarm and clean up."""
+        self._keepawake.release()
         # If alert was active, send stop through the same mode that triggered it.
         # _stop_alert handles player.stop(), worker.clear_alert(), and telegram stop.
         if self._alert_active:
