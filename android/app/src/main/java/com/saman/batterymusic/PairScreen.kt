@@ -32,7 +32,12 @@ import kotlinx.coroutines.withContext
  * land on the laptop before trusting the app.
  */
 @Composable
-fun PairScreen(prefs: Prefs, onPaired: () -> Unit) {
+fun PairScreen(
+    prefs: Prefs,
+    onPaired: () -> Unit,
+    darkTheme: Boolean,
+    onToggleTheme: (androidx.compose.ui.geometry.Offset) -> Unit,
+) {
     var workerUrl by remember { mutableStateOf(prefs.workerUrl) }
     var code by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
@@ -44,7 +49,14 @@ fun PairScreen(prefs: Prefs, onPaired: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Pair with your laptop", style = androidx.compose.material3.MaterialTheme.typography.headlineSmall)
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Pair with your laptop", style = androidx.compose.material3.MaterialTheme.typography.headlineSmall)
+            ThemeToggleButton(darkTheme = darkTheme, onToggle = onToggleTheme)
+        }
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(
             value = workerUrl,

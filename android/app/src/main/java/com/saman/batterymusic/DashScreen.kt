@@ -2,6 +2,16 @@ package com.saman.batterymusic
 
 import android.content.Intent
 import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,9 +21,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -27,9 +39,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -43,20 +59,38 @@ import kotlinx.coroutines.withContext
  * the dangerous direction -- disarming.
  */
 @Composable
-fun DashScreen(prefs: Prefs, onUnpaired: () -> Unit) {
+fun DashScreen(
+    prefs: Prefs,
+    darkTheme: Boolean,
+    onUnpaired: () -> Unit,
+    onToggleTheme: (androidx.compose.ui.geometry.Offset) -> Unit,
+) {
     var state by remember { mutableStateOf<PollState?>(null) }
     var photo by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var status by remember { mutableStateOf("") }
     var passDialog by remember { mutableStateOf(false) }
     var passInput by remember { mutableStateOf("") }
     var passError by remember { mutableStateOf<String?>(null) }
+    var unpairConfirm by remember { mutableStateOf(false) }
+    var ringing by remember { mutableStateOf(ArmService.ringing) }
+    var sirenTestRunning by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(Unit) {
         while (true) {
             state = withContext(Dispatchers.IO) { prefs.newClient().poll() }
             delay(5_000)
+        }
+    }
+
+    // The ArmService siren rings outside Compose; mirror it here so the
+    // dashboard can offer a big SILENCE button while it's going off.
+    LaunchedEffect(Unit) {
+        while (true) {
+            ringing = ArmService.ringing
+            delay(400)
         }
     }
 
@@ -82,111 +116,195 @@ fun DashScreen(prefs: Prefs, onUnpaired: () -> Unit) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Battery Music Notifier", style = MaterialTheme.typography.titleLarge)
-            OutlinedButton(onClick = onUnpaired) { Text("Unpair") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ThemeToggleButton(darkTheme = darkTheme, onToggle = onToggleTheme)
+                OutlinedButton(onClick = { unpairConfirm = true }) { Text("Unpair") }
+            }
         }
 
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                val s = state
-                if (s == null) {
-                    Text("Relay unreachable, retrying...")
-                } else {
-                    Text(
-                        if (s.alertActive) "ALERT: ${s.alertType}" else "Idle",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (s.alertActive) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.primary,
-                    )
-                    if (s.batteryPct >= 0) {
-                        Text("Battery: ${s.batteryPct}%${if (s.isCharging) " (charging)" else ""}")
-                    }
-                    if (s.armedBy != null) {
-                        Text("Armed by: ${s.armedBy}", style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (s.alertActive) {
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    val cleared = withContext(Dispatchers.IO) {
-                                        prefs.newClient().clearAlert()
+        StaggerIn(0) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    val s = state
+                    if (s == null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.size(12.dp))
+                            Text("Relay unreachable, retrying...")
+                        }
+                    } else {
+                        // The alert state breathes: pulse + animated color.
+                        val statusColor by animateColorAsState(
+                            if (s.alertActive) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary,
+                            label = "statusColor",
+                        )
+                        val pulse = rememberInfiniteTransition(label = "alertPulse")
+                        val pulseScale by pulse.animateFloat(
+                            initialValue = 0.94f, targetValue = 1.06f,
+                            animationSpec = infiniteRepeatable(tween(450), RepeatMode.Reverse),
+                            label = "pulseScale",
+                        )
+                        Text(
+                            if (s.alertActive) "ALERT: ${s.alertType}" else "Idle",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = statusColor,
+                            modifier = if (s.alertActive) {
+                                Modifier.graphicsLayer {
+                                    scaleX = pulseScale
+                                    scaleY = pulseScale
+                                }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        if (s.batteryPct >= 0) {
+                            Text("Battery: ${s.batteryPct}%${if (s.isCharging) " (charging)" else ""}")
+                        }
+                        if (s.armedBy != null) {
+                            Text("Armed by: ${s.armedBy}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (s.alertActive) {
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val cleared = withContext(Dispatchers.IO) {
+                                            prefs.newClient().clearAlert()
+                                        }
+                                        ArmService.silence()
+                                        Notifications.cancelThiefAlert(context)
+                                        status = if (cleared.ok) "Alarm stopped everywhere."
+                                                 else "Clear failed: ${cleared.error}"
                                     }
+                                },
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("STOP ALARM EVERYWHERE") }
+                            Text(
+                                "Stops the laptop siren too (guard listens for your clear).",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else if (ringing) {
+                            // The relay watcher is mid-siren but the account
+                            // state already moved on: silence just this phone.
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = {
                                     ArmService.silence()
                                     Notifications.cancelThiefAlert(context)
-                                    status = if (cleared.ok) "Alarm stopped everywhere."
-                                             else "Clear failed: ${cleared.error}"
+                                    status = "Phone silenced."
+                                },
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("SILENCE PHONE SIREN") }
+                        }
+                        if (s.snapshotId != null && photo == null) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    val bytes = withContext(Dispatchers.IO) {
+                                        prefs.newClient().fetchSnapshot(s.snapshotId!!)
+                                    }
+                                    photo = bytes?.let {
+                                        BitmapFactory.decodeByteArray(it, 0, it.size)
+                                    }
+                                    if (photo == null) status = "Could not load photo"
                                 }
-                            },
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("STOP ALARM EVERYWHERE") }
-                        Text(
-                            "Stops the laptop siren too (guard listens for your clear).",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                            }) { Text("VIEW INTRUDER PHOTO") }
+                        }
                     }
-                    if (s.snapshotId != null && photo == null) {
+                    photo?.let {
                         Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = {
-                            scope.launch {
-                                val bytes = withContext(Dispatchers.IO) {
-                                    prefs.newClient().fetchSnapshot(s.snapshotId!!)
-                                }
-                                photo = bytes?.let {
-                                    BitmapFactory.decodeByteArray(it, 0, it.size)
-                                }
-                                if (photo == null) status = "Could not load photo"
-                            }
-                        }) { Text("VIEW INTRUDER PHOTO") }
+                        Image(it.asImageBitmap(), contentDescription = "Intruder snapshot")
                     }
-                }
-                photo?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Image(it.asImageBitmap(), contentDescription = "Intruder snapshot")
                 }
             }
         }
 
         // Account-level ARM: drives every device, not just this phone
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text("System armed", style = MaterialTheme.typography.titleMedium)
-            Switch(
-                checked = state?.armed == true,
-                onCheckedChange = { on ->
-                    if (on) {
-                        scope.launch {
-                            val r = withContext(Dispatchers.IO) { prefs.newClient().armAccount(true) }
-                            status = if (r.ok) "Armed -- charger pull and intruders are watched."
-                                     else "Arm failed: ${r.error}"
+        StaggerIn(1) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("System armed", style = MaterialTheme.typography.titleMedium)
+                Switch(
+                    checked = state?.armed == true,
+                    onCheckedChange = { on ->
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (on) {
+                            scope.launch {
+                                val r = withContext(Dispatchers.IO) { prefs.newClient().armAccount(true) }
+                                status = if (r.ok) "Armed -- charger pull and intruders are watched."
+                                         else "Arm failed: ${r.error}"
+                            }
+                        } else if (KeystoreManager.hasKey() && context is androidx.fragment.app.FragmentActivity) {
+                            // Preferred disarm: fingerprint-signed, no typing
+                            launchBiometricDisarm(context, prefs, scope, onUpdate = { status = it },
+                                onPassFallback = { passInput = ""; passError = null; passDialog = true })
+                        } else if (state?.hasPass == true) {
+                            passInput = ""
+                            passError = null
+                            passDialog = true
+                        } else {
+                            scope.launch {
+                                val r = withContext(Dispatchers.IO) { prefs.newClient().armAccount(false) }
+                                status = if (r.ok) "Disarmed." else "Disarm failed: ${r.error}"
+                            }
                         }
-                    } else if (KeystoreManager.hasKey() && context is androidx.fragment.app.FragmentActivity) {
-                        // Preferred disarm: fingerprint-signed, no typing
-                        launchBiometricDisarm(context, prefs, scope, onUpdate = { status = it },
-                            onPassFallback = { passInput = ""; passError = null; passDialog = true })
-                    } else if (state?.hasPass == true) {
-                        passInput = ""
-                        passError = null
-                        passDialog = true
-                    } else {
-                        scope.launch {
-                            val r = withContext(Dispatchers.IO) { prefs.newClient().armAccount(false) }
-                            status = if (r.ok) "Disarmed." else "Disarm failed: ${r.error}"
-                        }
-                    }
-                },
-            )
+                    },
+                )
+            }
         }
 
-        SetupChecklist(prefs, state, onUpdate = { status = it })
+        StaggerIn(2) { SetupChecklist(prefs, state, onUpdate = { status = it }) }
+
+        StaggerIn(3) {
+            // Verify the phone-side siren without sending a real alert.
+            OutlinedButton(
+                onClick = {
+                    if (sirenTestRunning || ringing) return@OutlinedButton
+                    sirenTestRunning = true
+                    scope.launch {
+                        SirenPlayer.start(context)
+                        delay(3_000)
+                        SirenPlayer.stop()
+                        sirenTestRunning = false
+                        status = "Siren test done -- that's what a thief hears."
+                    }
+                },
+                enabled = !sirenTestRunning && !ringing,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (sirenTestRunning) "SIREN TESTING..." else "Test siren (3 s)") }
+        }
 
         if (status.isNotEmpty()) Text(status)
+    }
+
+    if (unpairConfirm) {
+        AlertDialog(
+            onDismissRequest = { unpairConfirm = false },
+            title = { Text("Unpair this phone?") },
+            text = { Text("The phone loses its relay token. You'll need a fresh 6-digit code from the laptop to pair again.") },
+            confirmButton = {
+                TextButton(onClick = { unpairConfirm = false; onUnpaired() }) { Text("Unpair") }
+            },
+            dismissButton = {
+                TextButton(onClick = { unpairConfirm = false }) { Text("Cancel") }
+            },
+        )
     }
 
     if (passDialog) {
@@ -393,4 +511,20 @@ fun SetupChecklist(prefs: Prefs, state: PollState?, onUpdate: (String) -> Unit) 
             }
         }
     }
+}
+
+/**
+ * Entrance animation: fade + slight rise, staggered by index so the
+ * dashboard settles in like a deck being dealt instead of popping at once.
+ */
+@Composable
+fun StaggerIn(index: Int, content: @Composable () -> Unit) {
+    val visible = remember { MutableTransitionState(false).apply { targetState = true } }
+    val delay = index * 90
+    AnimatedVisibility(
+        visibleState = visible,
+        enter = fadeIn(tween(300, delayMillis = delay)) +
+            slideInVertically(tween(380, delayMillis = delay)) { it / 4 },
+        exit = androidx.compose.animation.ExitTransition.None,
+    ) { content() }
 }

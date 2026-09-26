@@ -30,6 +30,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_ARMED, false)
         set(value) = sp.edit().putBoolean(KEY_ARMED, value).apply()
 
+    /** Theme choice: true = dark (default, the app's identity). */
+    var darkMode: Boolean
+        get() = sp.getBoolean(KEY_DARK, true)
+        set(value) = sp.edit().putBoolean(KEY_DARK, value).apply()
+
     fun hasToken(): Boolean = token.isNotEmpty()
 
     fun newClient(): ApiClient = ApiClient(workerUrl, token)
@@ -38,6 +43,7 @@ class Prefs(context: Context) {
         private const val KEY_WORKER = "worker_url"
         private const val KEY_TOKEN = "linked_token"
         private const val KEY_ARMED = "armed"
+        private const val KEY_DARK = "dark_mode"
 
         @Volatile private var instance: Prefs? = null
 
