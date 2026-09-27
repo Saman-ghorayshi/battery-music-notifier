@@ -116,6 +116,7 @@ class Bridge:
         "email_receiver": (str, None),
         "music_files": (list, None), "alarm_files": (list, None),
         "socket_secret": (str, None),
+        "alarm_pin": (str, None), "alarm_output": (str, None),
     }
 
     def get_settings(self) -> dict:
@@ -126,7 +127,7 @@ class Bridge:
         for key, (typ, _attr) in self._FIELDS.items():
             val = getattr(cfg, key)
             out[key] = val
-        for secret in ("telegram_token", "email_password", "admin_key", "socket_secret"):
+        for secret in ("telegram_token", "email_password", "admin_key", "socket_secret", "alarm_pin"):
             if out.get(secret):
                 out[secret] = _MASK
         out["autostart"] = self._autostart_enabled()

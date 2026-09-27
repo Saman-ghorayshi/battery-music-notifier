@@ -231,6 +231,13 @@ class Config:
 
     # Local socket shared secret (optional, prevents LAN attackers from sending STOP)
     socket_secret: str = ""
+    # v2.6 alarm hardening: the PIN the fullscreen gate asks for when the
+    # thief alarm rings locally (owner types it to silence everything), and
+    # which output the alarm plays through -- 'auto' forces built-in
+    # speakers (never Bluetooth), 'default' trusts the OS, or any substring
+    # of a device name to pin a specific output.
+    alarm_pin: str = "6969"
+    alarm_output: str = "auto"
 
     # Intruder guard (v2.1): webcam index used for failed-logon snapshots
     guard_camera_index: int = 0

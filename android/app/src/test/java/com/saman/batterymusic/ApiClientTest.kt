@@ -292,4 +292,21 @@ class DisarmKeyTest {
         assertEquals(5L, state.alertTs)
         server.shutdown()
     }
+
+    @Test
+    fun pairPayload_roundtrips_valid_qr() {
+        val parsed = parsePairPayload("BMN1|https://battery-relay.example.dev|254670")
+        assertEquals("https://battery-relay.example.dev", parsed?.first)
+        assertEquals("254670", parsed?.second)
+    }
+
+    @Test
+    fun pairPayload_rejects_foreign_and_malformed_qr() {
+        assertNull(parsePairPayload("https://evil.example|123456"))
+        assertNull(parsePairPayload("BMN1|not-a-url|254670"))
+        assertNull(parsePairPayload("BMN1|https://x.dev|12ab56"))
+        assertNull(parsePairPayload("BMN1|https://x.dev"))
+        assertNull(parsePairPayload(""))
+        assertNull(parsePairPayload(null))
+    }
 }

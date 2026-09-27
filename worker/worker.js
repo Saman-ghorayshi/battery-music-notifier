@@ -506,6 +506,15 @@ async function handleArm(request, db, user, env) {
   await db.prepare(
     "UPDATE users SET armed = ?, armed_by = ?, last_seen = ? WHERE user_id = ?"
   ).bind(wantArmed, user.device_name || "device", now(), user.user_id).run();
+  // Disarming stands EVERYTHING down, including an active THIEF_ALERT: the
+  // owner just authenticated with the pass/key, so this is unambiguous.
+  // (Without this, a charger-watch alert lingered after a legit disarm and
+  // re-armed chaos on the next poll.)
+  if (!wantArmed && user.alert_active) {
+    await db.prepare(
+      "UPDATE users SET alert_active = 0, alert_type = '', alert_origin = NULL WHERE user_id = ?"
+    ).bind(user.user_id).run();
+  }
   return json({ ok: true, armed: wantArmed });
 }
 

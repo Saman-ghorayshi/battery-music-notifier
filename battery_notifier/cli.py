@@ -545,7 +545,7 @@ socket_secret = "{esc(socket_secret)}"
             print("  [ERROR] No alarm sound configured. Run 'battery-music init' first.")
             return 2
 
-        player = Player(alarm_files, cfg.volume, annoying=True)
+        player = Player(alarm_files, cfg.volume, annoying=True, output_mode=getattr(cfg, "alarm_output", "auto"))
         tc = ThiefCatcher(cfg, player=player, worker_client=worker, local_port=args.port)
 
         if args.force:
@@ -617,7 +617,7 @@ socket_secret = "{esc(socket_secret)}"
         alarm_files = cfg.alarm_files if cfg.alarm_files else cfg.music_files
         if alarm_files and getattr(cfg, "guard_siren", True):
             from .player import Player
-            player = Player(alarm_files, cfg.volume, annoying=True)
+            player = Player(alarm_files, cfg.volume, annoying=True, output_mode=getattr(cfg, "alarm_output", "auto"))
 
         g = IntruderGuard(
             cfg, worker_client=worker, player=player,
@@ -890,7 +890,7 @@ socket_secret = "{esc(socket_secret)}"
                 print("  [ERROR] No alarm sound configured. Run 'battery-music init' first.")
                 return 2
 
-            player = Player(alarm_files, cfg.volume, annoying=True)
+            player = Player(alarm_files, cfg.volume, annoying=True, output_mode=getattr(cfg, "alarm_output", "auto"))
             # Alert EPISODE tracking: the sound plays once per
             # (alert_ts, alert_type); see _relay_episode_should_play.
             last_episode = None
@@ -952,6 +952,21 @@ socket_secret = "{esc(socket_secret)}"
                                 player.play()
                                 sound_started = _time.time()
                                 sound_active = True
+                                # PIN gate for THIEF episodes the relay is the
+                                # alarm source of: fullscreen, ignores Alt+F4,
+                                # only the PIN silences it. The gate also clears
+                                # the relay alert -- the owner is physically here.
+                                if (alert_type == "THIEF_ALERT"
+                                        and getattr(cfg, "alarm_pin", "")):
+                                    def pin_gate():
+                                        from .alarm_gate import show_pin_gate
+                                        if show_pin_gate(cfg.alarm_pin):
+                                            try:
+                                                worker.clear_alert()
+                                            except Exception as e:
+                                                log.warning("PIN clear failed: %s", e)
+                                            player.stop()
+                                    threading.Thread(target=pin_gate, name="alarm-pin-gate", daemon=True).start()
                         elif not alert_active and sound_active:
                             print(f"  [{_time.strftime('%H:%M:%S')}] Alert cleared.")
                             player.stop()
@@ -1166,6 +1181,19 @@ socket_secret = "{esc(socket_secret)}"
             print("  ========================================")
             print("  Run this command on your other device within 5 minutes:")
             print(f"    battery-music link {code}")
+            # v2.6: QR pairing -- the phone's Pair screen scans this instead
+            # of typing anything. Terminal ASCII for the tty, topmost window
+            # with a big scannable QR for the camera.
+            from .qrpair import ascii_qr, build_pair_payload, show_qr_window
+            try:
+                payload = build_pair_payload(cfg.worker_url, code)
+                print()
+                print(ascii_qr(payload))
+                print("  ...or point the phone's 'Scan QR' at this window.")
+                show_qr_window(payload, ttl_seconds=300)
+                print("  QR window closed. If the phone paired, its dashboard is live.")
+            except Exception as e:
+                log.warning("QR pairing render failed: %s", e)
         else:
             print(f"  [ERROR] Failed to generate code: {resp.get('error')}")
         return 0

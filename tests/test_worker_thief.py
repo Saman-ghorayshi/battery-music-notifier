@@ -172,7 +172,9 @@ def test_worker_network_error_handling(mock_requests, mock_config):
     assert wc.send_alert() is False
     assert wc.ping() is False
     assert wc.register() is None
-    assert wc.poll() == {"ok": False, "error": "network error"}
+    # v2.6 route fallback: both routes fail, so the error is the wrapped
+    # connection failure (was the bare str(e) before the fallback existed).
+    assert wc.poll() == {"ok": False, "error": "connection_failed: network error"}
 
 
 # ---------------------------------------------------------------------------

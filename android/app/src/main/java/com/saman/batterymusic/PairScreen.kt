@@ -42,7 +42,44 @@ fun PairScreen(
     var code by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var pairing by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    fun pairWith(url: String, pairingCode: String) {
+        pairing = true
+        status = "Pairing..."
+        scope.launch {
+            prefs.workerUrl = url
+            val result = withContext(Dispatchers.IO) {
+                ApiClient(url, prefs.token).pairLink(pairingCode)
+            }
+            pairing = false
+            if (result.ok && result.token != null) {
+                prefs.token = result.token
+                onPaired()
+            } else {
+                status = "Failed: ${result.error}"
+            }
+        }
+    }
+
+    if (showScanner) {
+        QrScanScreen(
+            onDecoded = { raw ->
+                showScanner = false
+                val parsed = parsePairPayload(raw)
+                if (parsed == null) {
+                    status = "That QR is not a pairing code."
+                } else {
+                    workerUrl = parsed.first
+                    code = parsed.second
+                    pairWith(parsed.first, parsed.second)
+                }
+            },
+            onCancel = { showScanner = false },
+        )
+        return
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -76,26 +113,17 @@ fun PairScreen(
         )
         Spacer(Modifier.height(16.dp))
         Button(
-            onClick = {
-                pairing = true
-                status = "Pairing..."
-                scope.launch {
-                    prefs.workerUrl = workerUrl
-                    val result = withContext(Dispatchers.IO) {
-                        ApiClient(workerUrl, prefs.token).pairLink(code)
-                    }
-                    pairing = false
-                    if (result.ok && result.token != null) {
-                        prefs.token = result.token
-                        onPaired()
-                    } else {
-                        status = "Failed: ${result.error}"
-                    }
-                }
-            },
+            onClick = { pairWith(workerUrl, code) },
             enabled = !pairing && code.length == 6,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("PAIR") }
+
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = { showScanner = true },
+            enabled = !pairing,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("SCAN QR CODE on the laptop") }
 
         Spacer(Modifier.height(24.dp))
         if (prefs.hasToken()) {
@@ -116,4 +144,20 @@ fun PairScreen(
             Text(status)
         }
     }
+}
+
+/**
+ * Parse the laptop's QR payload: "BMN1|<relay-url>|<6-digit-code>".
+ * Null for anything else -- foreign QR codes must be ignored, never
+ * half-applied. Pure JVM so the unit tests can drive it directly.
+ */
+fun parsePairPayload(raw: String?): kotlin.Pair<String, String>? {
+    if (raw.isNullOrBlank()) return null
+    val parts = raw.trim().split("|")
+    if (parts.size != 3 || parts[0] != "BMN1") return null
+    val url = parts[1].trim()
+    val code = parts[2].trim()
+    if (!url.startsWith("http://") && !url.startsWith("https://")) return null
+    if (code.length != 6 || code.any { !it.isDigit() }) return null
+    return kotlin.Pair(url, code)
 }

@@ -7,6 +7,10 @@ android {
     namespace = "com.saman.batterymusic"
     compileSdk = 34
 
+    // Pin a COMPLETE NDK: the default 25.1 install on this machine is a
+    // hollow stub (no toolchains/llvm), which broke stripDebugSymbols.
+    ndkVersion = "27.0.12077973"
+
     defaultConfig {
         applicationId = "com.saman.batterymusic"
         minSdk = 26          // POWER_DISCONNECTED is implicit-broadcast-exempt from 26
@@ -54,6 +58,12 @@ dependencies {
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.fragment:fragment-ktx:1.6.2")
     implementation("org.json:json:20240303")
+    // QR pairing: CameraX preview + zxing decode (no Play Services needed)
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
+    implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")

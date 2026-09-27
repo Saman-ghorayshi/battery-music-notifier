@@ -66,7 +66,9 @@ fun DashScreen(
     onToggleTheme: (androidx.compose.ui.geometry.Offset) -> Unit,
 ) {
     var state by remember { mutableStateOf<PollState?>(null) }
+    var offline by remember { mutableStateOf(false) }
     var photo by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var photoFor by remember { mutableStateOf<Long?>(null) }
     var status by remember { mutableStateOf("") }
     var passDialog by remember { mutableStateOf(false) }
     var passInput by remember { mutableStateOf("") }
@@ -83,8 +85,26 @@ fun DashScreen(
 
     LaunchedEffect(Unit) {
         while (true) {
-            state = withContext(Dispatchers.IO) { prefs.newClient().poll() }
+            val polled = withContext(Dispatchers.IO) { prefs.newClient().poll() }
+            if (polled != null) {
+                // Keep the last-known state on failures: a dropped Wi-Fi
+                // connection must never flip the armed toggle off or hide
+                // an active alarm -- the guard is still armed server-side.
+                state = polled
+                offline = false
+            } else {
+                offline = true
+            }
             delay(5_000)
+        }
+    }
+
+    // A new intruder snapshot invalidates the cached photo (the old one
+    // stayed pinned forever, hiding the newest thief from the user).
+    LaunchedEffect(state?.snapshotId) {
+        if (state?.snapshotId != photoFor) {
+            photo = null
+            photoFor = state?.snapshotId
         }
     }
 
@@ -145,6 +165,13 @@ fun DashScreen(
                             Text("Relay unreachable, retrying...")
                         }
                     } else {
+                        if (offline) {
+                            Text(
+                                "offline -- showing last known state",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         // The alert state breathes: pulse + animated color.
                         val statusColor by animateColorAsState(
                             if (s.alertActive) MaterialTheme.colorScheme.error

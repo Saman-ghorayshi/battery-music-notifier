@@ -178,6 +178,8 @@ async function loadSettings() {
   $("email_receiver").value = st.email_receiver || "";
   $("admin_key").value = st.admin_key || "";
   $("socket_secret").value = st.socket_secret || "";
+  $("alarm_output").value = st.alarm_output || "auto";
+  $("alarm_pin").value = st.alarm_pin || "";
   const qh = Array.isArray(st.quiet_hours) ? st.quiet_hours : [22, 8];
   $("quiet-start").value = qh[0] ?? 22;
   $("quiet-end").value = qh[1] ?? 8;
@@ -226,6 +228,8 @@ $("btn-save").addEventListener("click", async () => {
     email_receiver: $("email_receiver").value.trim(),
     admin_key: $("admin_key").value,
     socket_secret: $("socket_secret").value,
+    alarm_output: $("alarm_output").value,
+    alarm_pin: $("alarm_pin").value,
   };
   const r = await api().save_settings(payload);
   $("save-status").textContent = r && r.ok ? "Saved." : "Save failed.";

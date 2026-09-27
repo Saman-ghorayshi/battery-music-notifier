@@ -127,6 +127,18 @@ class RelayService(threading.Thread):
                         self.bus.update("relay", last_alert=f"{alert_type} @ {time.strftime('%H:%M:%S')}")
                         if alert_type == "THIEF_ALERT" and self.player:
                             self.player.play()
+                            # PIN gate (same contract as the CLI relay): the
+                            # owner types the PIN to silence + clear.
+                            if getattr(self.cfg, "alarm_pin", ""):
+                                cfg_ref = self.cfg
+                                worker_ref = self.worker
+                                def gui_pin_gate():
+                                    from .alarm_gate import show_pin_gate
+                                    if show_pin_gate(cfg_ref.alarm_pin):
+                                        try: worker_ref.clear_alert()
+                                        except Exception: pass
+                                        if self.player: self.player.stop()
+                                threading.Thread(target=gui_pin_gate, name="alarm-pin-gate", daemon=True).start()
                     elif not alert_active and self._last_alert_active:
                         if self.player:
                             self.player.stop()
@@ -192,7 +204,7 @@ class ThiefService:
             worker = WorkerClient(self.cfg.worker_url, self.cfg.worker_token, self.cfg)
 
         alarm_files = self.cfg.alarm_files or self.cfg.music_files
-        player = Player(alarm_files, self.cfg.volume, annoying=True) if alarm_files else None
+        player = Player(alarm_files, self.cfg.volume, annoying=True, output_mode=getattr(self.cfg, "alarm_output", "auto")) if alarm_files else None
         self.catcher = ThiefCatcher(
             self.cfg, player=player, worker_client=worker, local_port=8000,
         )
@@ -298,7 +310,7 @@ class ServiceManager:
         player = None
         alarm_files = self.cfg.alarm_files or self.cfg.music_files
         if alarm_files:
-            player = Player(alarm_files, self.cfg.volume, annoying=True)
+            player = Player(alarm_files, self.cfg.volume, annoying=True, output_mode=getattr(self.cfg, "alarm_output", "auto"))
         self.relay = RelayService(self.cfg, self.bus, player=player)
         self.relay.start()
         return {"ok": True}

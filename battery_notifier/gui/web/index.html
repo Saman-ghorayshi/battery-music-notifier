@@ -99,6 +99,13 @@
         <label>Volume: <output id="volume-out">80</output>%</label>
         <input type="range" id="volume" min="0" max="100" step="5">
         <label class="inline"><input type="checkbox" id="annoying"> Loop annoyingly until unplugged</label>
+        <label>Alarm output (speakers, never AirPods)</label>
+        <select id="alarm_output">
+          <option value="auto">Auto: built-in speakers (refuses Bluetooth)</option>
+          <option value="default">System default output</option>
+        </select>
+        <label>Alarm PIN (fullscreen gate asks for it when the siren rings)</label>
+        <input type="password" id="alarm_pin" placeholder="__SET__ means configured">
       </div>
 
       <div class="card">

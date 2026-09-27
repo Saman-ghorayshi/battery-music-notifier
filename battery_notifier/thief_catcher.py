@@ -173,6 +173,7 @@ class ThiefCatcher:
         self._alert_active = False
         self._keepawake = KeepAwake()
         self._thief_lock = None  # guardlock thief.lock, held while armed
+        self._gate_proc = None   # fullscreen PIN gate process (thief only)
 
     def arm(self, mode: str = "both", verbose: bool = True, force: bool = False) -> None:
         """Start monitoring for charger unplug.
@@ -295,6 +296,14 @@ class ThiefCatcher:
         # where the "official" alarm is expected from another device.
         if self.player: self.player.play()
 
+        # Fullscreen PIN gate: the siren keeps playing until the owner types
+        # the PIN (alarm_pin, default 6969). A thief closing the window
+        # changes nothing; the monitoring loop's re-plug branch can still
+        # stop the player underneath the gate.
+        if self.cfg and getattr(self.cfg, "alarm_pin", ""):
+            from .alarm_gate import spawn_gate
+            self._gate_proc = spawn_gate(self.cfg.alarm_pin)
+
         if mode == "telegram":
             self._send_telegram_alert("THIEF_ALERT", verbose)
             return
@@ -380,6 +389,12 @@ class ThiefCatcher:
     def _disarm(self) -> None:
         """Disarm and clean up."""
         self._keepawake.release()
+        # Close the fullscreen PIN gate process if it is still waiting.
+        proc = getattr(self, "_gate_proc", None)
+        if proc is not None and proc.poll() is None:
+            try: proc.terminate()
+            except Exception: pass
+            self._gate_proc = None
         # If alert was active, send stop through the same mode that triggered it.
         # _stop_alert handles player.stop(), worker.clear_alert(), and telegram stop.
         if self._alert_active:

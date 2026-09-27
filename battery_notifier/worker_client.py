@@ -27,6 +27,11 @@ class WorkerClient:
         self.config = config
         self._proxy = get_effective_proxy(config)
         self._proxies = {"http": self._proxy, "https": self._proxy} if self._proxy else None
+        # v2.6 route fallback: censorship middleboxes reset TLS selectively
+        # (python-requests blocked direct one hour, the proxy the next).
+        # A failed CONNECTION now retries once on the alternate route and
+        # sticks to whichever worked -- the alert must get through.
+        self._alt_proxies = None if self._proxies else {"http": "socks5h://127.0.0.1:10808", "https": "socks5h://127.0.0.1:10808"}
 
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json"}
@@ -34,33 +39,46 @@ class WorkerClient:
             h["Authorization"] = f"Bearer {self.token}"
         return h
 
+    def _request_with_fallback(self, method: str, path: str, payload: dict | None) -> dict:
+        """One attempt on the primary route; on a connection failure, one
+        retry on the alternate route (direct <-> local proxy)."""
+        import socks  # noqa: F401  (PySocks: makes socks5h proxies available)
+
+        routes = [self._proxies, self._alt_proxies]
+        last_err: Exception | None = None
+        for proxies in routes:
+            try:
+                if method == "POST":
+                    r = requests.post(
+                        f"{self.base_url}{path}", json=payload,
+                        headers=self._headers(), proxies=proxies, timeout=REQUEST_TIMEOUT,
+                    )
+                else:
+                    r = requests.get(
+                        f"{self.base_url}{path}", headers=self._headers(),
+                        proxies=proxies, timeout=REQUEST_TIMEOUT,
+                    )
+                if proxies is not None and proxies is not self._proxies:
+                    # The alternate route worked: make it primary.
+                    log.warning("Primary route failed; switched to the alternate route")
+                    self._proxies, self._alt_proxies = proxies, self._proxies
+                if r.status_code >= 400:
+                    try: return r.json()
+                    except ValueError: return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
+                return r.json()
+            except Timeout as e:
+                last_err = e
+            except ReqConnError as e:
+                last_err = e
+            except Exception as e:
+                last_err = e
+        return {"ok": False, "error": f"connection_failed: {last_err}"}
+
     def _post(self, path: str, payload: dict) -> dict:
-        try:
-            r = requests.post(
-                f"{self.base_url}{path}", json=payload,
-                headers=self._headers(), proxies=self._proxies, timeout=REQUEST_TIMEOUT,
-            )
-            if r.status_code >= 400:
-                try: return r.json()
-                except ValueError: return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
-            return r.json()
-        except Timeout: return {"ok": False, "error": "timeout"}
-        except ReqConnError as e: return {"ok": False, "error": f"connection_failed: {e}"}
-        except Exception as e: return {"ok": False, "error": str(e)}
+        return self._request_with_fallback("POST", path, payload)
 
     def _get(self, path: str) -> dict:
-        try:
-            r = requests.get(
-                f"{self.base_url}{path}", headers=self._headers(),
-                proxies=self._proxies, timeout=REQUEST_TIMEOUT,
-            )
-            if r.status_code >= 400:
-                try: return r.json()
-                except ValueError: return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
-            return r.json()
-        except Timeout: return {"ok": False, "error": "timeout"}
-        except ReqConnError as e: return {"ok": False, "error": f"connection_failed: {e}"}
-        except Exception as e: return {"ok": False, "error": str(e)}
+        return self._request_with_fallback("GET", path, None)
 
     # ---- Public API ----
 

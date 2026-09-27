@@ -373,7 +373,11 @@ def load_verdict(model_path: Path = None):
         log.warning("opencv-contrib not installed -- face check disabled "
                     "(install with: pip install battery-music-notifier[guard])")
         return None
-    model_path = model_path or model_path()
+    # NOTE: the parameter shadows the module-level model_path() helper, so
+    # resolve the default explicitly instead of calling the shadowed name.
+    if model_path is None:
+        import sys as _sys
+        model_path = _sys.modules[__name__].model_path()
     model_bytes = load_model_bytes(model_path)
     if model_bytes is None:
         return None

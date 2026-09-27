@@ -8,13 +8,43 @@ import logging
 log = logging.getLogger(__name__)
 
 class Player:
-    def __init__(self, files, volume: float = 0.8, annoying: bool = False):
+    def __init__(self, files, volume: float = 0.8, annoying: bool = False,
+                 output_mode: str = "auto"):
         self.files = [str(os.path.expanduser(f)) for f in files]
         self.volume = max(0.0, min(1.0, volume))
         self.annoying = annoying
+        # v2.6: which output the alarm uses. 'auto' forces built-in speakers
+        # and refuses Bluetooth/headphones -- the owner's AirPods in another
+        # room must never silence a scream meant for the whole room.
+        self.output_mode = output_mode or "auto"
         self._thread = None
         self._stop = threading.Event()
         self._playing = False
+
+    def _pick_output_device(self):
+        """Index of the sounddevice output to play the alarm through, or
+        None for the system default. See alarm_output docs in config.py."""
+        import re
+        import sounddevice as sd
+        try:
+            outputs = [d for d in sd.query_devices() if d["max_output_channels"] > 0]
+        except Exception:
+            return None
+        mode = (self.output_mode or "auto").strip()
+        if mode.lower() == "default":
+            return None
+        if mode.lower() != "auto":
+            named = [d for d in outputs if mode.lower() in str(d["name"]).lower()]
+            return named[0]["index"] if named else None
+        speaker_re = re.compile(r"speaker|loudspeaker", re.I)
+        remote_re = re.compile(r"airpod|bluetooth|headphone|headset|earbud|hands-?free|hdmi|spdif|digital output", re.I)
+        builtin = [d for d in outputs
+                   if speaker_re.search(str(d["name"])) and not remote_re.search(str(d["name"]))]
+        if builtin:
+            return builtin[0]["index"]
+        # No explicit 'speaker' name: any local output that is not remote.
+        nonremote = [d for d in outputs if not remote_re.search(str(d["name"]))]
+        return nonremote[0]["index"] if nonremote else None
 
     @property
     def playing(self) -> bool:
@@ -48,11 +78,17 @@ class Player:
 
             if sd is not None and sf is not None:
                 try:
+                    device_index = self._pick_output_device()
+                    if device_index is not None:
+                        log.info("Alarm output: device %s (%r) -- built-in speakers forced",
+                                 device_index, str(sd.query_devices()[device_index]["name"]))
+                    else:
+                        log.info("Alarm output: system default")
                     data, sr = sf.read(first, dtype="float32")
                     while not self._stop.is_set():
                         duration = len(data) / sr
                         start_time = time.time()
-                        sd.play(data * self.volume, sr)
+                        sd.play(data * self.volume, sr, device=device_index)
 
                         while time.time() - start_time < duration and not self._stop.is_set():
                             time.sleep(0.1)
