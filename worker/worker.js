@@ -1045,6 +1045,14 @@ async function handlePairLink(request, db) {
   // Re-linking rotates the linked token, de-authorizing the previous phone.
   const linkedToken = randomToken();
   const linkedHash = await sha256(linkedToken);
+  // Retire the previous phone's device row: re-pairing rotates the linked
+  // token, so the old row would sit in the registry forever (seen live:
+  // three 'Xiaomi' rows after one night of testing).
+  const prevLinked = await db.prepare("SELECT linked_token FROM users WHERE user_id = ?")
+    .bind(record.user_id).first();
+  if (prevLinked && prevLinked.linked_token) {
+    await db.prepare("DELETE FROM devices WHERE token_hash = ?").bind(prevLinked.linked_token).run();
+  }
   await db.prepare("UPDATE users SET linked_token = ?, last_seen = ? WHERE user_id = ?")
     .bind(linkedHash, now(), record.user_id).run();
 
