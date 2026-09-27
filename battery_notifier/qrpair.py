@@ -48,9 +48,12 @@ def ascii_qr(payload: str) -> str:
         return f"(terminal QR unavailable: {e})"
 
 
-def show_qr_window(payload: str, ttl_seconds: int = 300) -> None:
+def show_qr_window(payload: str, ttl_seconds: int = 300,
+                   linked_event=None) -> None:
     """Topmost window with a large scannable QR. Blocks the calling thread
-    until closed or the pairing code's TTL expires."""
+    until closed, the pairing code's TTL expires, or -- the smart part --
+    `linked_event` fires: the laptop watches the relay and closes the QR
+    the moment a device actually pairs."""
     if os.name != "nt":
         return
     try:
@@ -83,9 +86,16 @@ def show_qr_window(payload: str, ttl_seconds: int = 300) -> None:
     remaining = {"t": ttl_seconds}
 
     def tick() -> None:
-        if root.winfo_exists() and remaining["t"] > 0:
-            m, s = divmod(remaining["t"], 60)
-            countdown.config(text=f"code expires in {m:02d}:{s:02d}")
+        if not root.winfo_exists():
+            return
+        if linked_event is not None and linked_event.is_set():
+            countdown.config(text="✓ Device paired! You can close this.",
+                             fg="#2e7d32", font=("Segoe UI", 12, "bold"))
+            root.after(2500, lambda: root.destroy() if root.winfo_exists() else None)
+            return
+        if remaining["t"] > 0:
+            m, sec = divmod(remaining["t"], 60)
+            countdown.config(text=f"code expires in {m:02d}:{sec:02d}")
             remaining["t"] -= 1
             root.after(1000, tick)
         else:

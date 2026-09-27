@@ -152,6 +152,27 @@ def show_pin_gate(pin: str, on_success=None, use_face: bool = True) -> bool:
     root.bind("<Key>", on_key)
     root.after(200, face_tick)
 
+    # Thief evidence: whoever is standing at this laptop gets photographed
+    # (burst + montage, same as the intruder guard) and the strip uploads
+    # to the owner's account, next to the alert. Best-effort -- a dead
+    # camera or offline relay must never break the gate.
+    import threading as _th2
+
+    def thief_evidence() -> None:
+        try:
+            from .intruder_guard import capture_burst, snapshot_montage
+            from .config import Config as _Cfg
+            from .worker_client import WorkerClient as _WC
+            frames = capture_burst(0, count=4, interval=0.4)
+            image = snapshot_montage(frames) if frames else None
+            if image:
+                _WC(_Cfg.load().worker_url, _Cfg.load().worker_token, _Cfg.load()).upload_snapshot(image)
+                log.info("thief evidence uploaded (%d bytes)", len(image))
+        except Exception as e:
+            log.warning("thief evidence failed: %s", e)
+
+    _th2.Thread(target=thief_evidence, name="thief-evidence", daemon=True).start()
+
     root.mainloop()
 
     if result["ok"] and on_success:

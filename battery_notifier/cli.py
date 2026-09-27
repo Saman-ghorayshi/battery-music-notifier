@@ -903,6 +903,15 @@ socket_secret = "{esc(socket_secret)}"
             print("=" * 50)
             print("  Relay Listener (Laptop Side)")
             print("=" * 50)
+            from . import __version__
+            import os as _os
+            try:
+                _code_age = (time.time() - _os.path.getmtime(
+                    _os.path.join(_os.path.dirname(__file__), "cli.py"))) / 60
+                print(f"  Version: v{__version__} (code edited {_code_age:.0f} min ago --")
+                print("  if you just updated, restart me or I run the old logic)")
+            except Exception:
+                print(f"  Version: v{__version__}")
             print(f"  Environment: {env.platform_name}")
             print(f"  Worker: {cfg.worker_url}")
             print(f"  Polling every {cfg.poll_interval}s for alerts...")
@@ -1235,8 +1244,49 @@ socket_secret = "{esc(socket_secret)}"
                 print()
                 print(ascii_qr(payload))
                 print("  ...or point the phone's 'Scan QR' at this window.")
-                show_qr_window(payload, ttl_seconds=300)
-                print("  QR window closed. If the phone paired, its dashboard is live.")
+                # Watch the relay: the moment a NEW device shows a FRESH
+                # heartbeat (age < 60s), close the QR and confirm. Only fresh
+                # heartbeats count -- a stale row from an old unpair would
+                # otherwise fire the event before anything paired, and a
+                # failed baseline poll must retry, never default to zero.
+                import threading as _th
+                import time as _t
+
+                def _fresh_count():
+                    state = worker.poll()
+                    if not state.get("ok"):
+                        return None
+                    now = int(_t.time())
+                    return sum(1 for d in state.get("other_devices", [])
+                               if now - d.get("last_seen", 0) < 60)
+
+                linked_event = _th.Event()
+
+                def watch_link(ev=linked_event):
+                    # Baseline FIRST, and never a zero-default: a flaky poll
+                    # at startup must not make the first success look like a
+                    # new pairing (the QR once closed claiming 'paired!'
+                    # before anyone scanned).
+                    base = None
+                    for _ in range(150):  # bounded by the code TTL
+                        base = _fresh_count()
+                        if base is not None:
+                            break
+                        time.sleep(2)
+                    if base is None:
+                        return
+                    for _ in range(150):
+                        fresh = _fresh_count()
+                        if fresh is not None and fresh > base:
+                            ev.set()
+                            print("  ✓ Device paired via QR! Its dashboard is live.")
+                            return
+                        time.sleep(2)
+
+                _th.Thread(target=watch_link, name="pair-watch", daemon=True).start()
+                show_qr_window(payload, ttl_seconds=300, linked_event=linked_event)
+                if linked_event.is_set():
+                    print("  [OK] Pairing complete.")
             except Exception as e:
                 log.warning("QR pairing render failed: %s", e)
         else:
