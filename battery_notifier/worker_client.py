@@ -27,6 +27,11 @@ class WorkerClient:
         self.config = config
         self._proxy = get_effective_proxy(config)
         self._proxies = {"http": self._proxy, "https": self._proxy} if self._proxy else None
+        # trust_env=False: "direct" must mean DIRECT. Without this, requests
+        # silently inherited the Windows system proxy (v2rayN), so the
+        # direct route was never direct and inherited its flakiness.
+        self._session = requests.Session()
+        self._session.trust_env = False
         # v2.6 route fallback: censorship middleboxes reset TLS selectively
         # (python-requests blocked direct one hour, the proxy the next).
         # A failed CONNECTION now retries once on the alternate route and
@@ -49,12 +54,12 @@ class WorkerClient:
         for proxies in routes:
             try:
                 if method == "POST":
-                    r = requests.post(
+                    r = self._session.post(
                         f"{self.base_url}{path}", json=payload,
                         headers=self._headers(), proxies=proxies, timeout=REQUEST_TIMEOUT,
                     )
                 else:
-                    r = requests.get(
+                    r = self._session.get(
                         f"{self.base_url}{path}", headers=self._headers(),
                         proxies=proxies, timeout=REQUEST_TIMEOUT,
                     )

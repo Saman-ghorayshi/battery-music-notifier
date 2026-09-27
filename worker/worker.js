@@ -19,7 +19,11 @@ const MAX_EVENTS_PER_USER = 200; // keep event log bounded
 // * 4/3 plus slack for the JSON wrapper).
 const SNAPSHOT_MAX_BYTES = 153600; // 150 KB decoded
 const SNAPSHOT_BODY_LIMIT = 212992; // 208 KB of base64-in-JSON
-const MAX_SNAPSHOTS_PER_USER = 5; // older snapshots get pruned on upload
+const MAX_SNAPSHOTS_PER_USER = 3; // older snapshots get pruned on upload
+// v2.6.3: Telegram is the PERMANENT home of thief photos (sent the moment
+// they upload); R2 is only a short-lived viewing cache for the app's
+// "VIEW INTRUDER PHOTO". Anything older than this is pruned on poll/upload.
+const SNAPSHOT_TTL_SECONDS = 24 * 60 * 60;
 
 // Self-hosted users can disable rate limiting via env var
 // THIEF_ALERT always bypasses rate limiting regardless of this setting
@@ -412,6 +416,9 @@ async function handlePoll(request, db, user) {
   const snap = await db.prepare(
     "SELECT snap_id FROM snapshots WHERE user_id = ? ORDER BY snap_id DESC LIMIT 1"
   ).bind(user.user_id).first();
+  // v2.6.3: age-based snapshot expiry rides on poll (best-effort) so R2
+  // prunes even when nothing new uploads.
+  ctx.waitUntil(pruneSnapshots(db, env, user.user_id));
   // v2.5: the account's other devices, newest heartbeat first. Old clients
   // ignore the extra field, and a registry hiccup must not break polling.
   let otherDevices = [];
@@ -594,17 +601,49 @@ async function handleSnapshotUpload(request, db, env, user) {
     "INSERT INTO snapshots (user_id, r2_key, content_type, bytes, created_at) VALUES (?, ?, ?, ?, ?)"
   ).bind(user.user_id, r2Key, contentType, bytes.length, t).run();
 
-  // Retention: only the newest MAX_SNAPSHOTS_PER_USER survive; prune the rest
-  // from R2 too so the bucket can't grow behind the D1 trim.
-  const stale = await db.prepare(
-    "SELECT snap_id, r2_key FROM snapshots WHERE user_id = ? ORDER BY snap_id DESC LIMIT -1 OFFSET ?"
-  ).bind(user.user_id, MAX_SNAPSHOTS_PER_USER).all();
-  for (const row of stale.results || []) {
-    try { await env.SNAPSHOTS.delete(row.r2_key); } catch (_) {}
-    await db.prepare("DELETE FROM snapshots WHERE snap_id = ?").bind(row.snap_id).run();
+  // Telegram-first: if a THIEF alert is active, this photo IS the evidence
+  // -- land it in the owner's chat immediately (fire-and-forget; a Telegram
+  // outage must never fail the upload).
+  if (user.alert_active && user.alert_type === "THIEF_ALERT") {
+    ctx.waitUntil(sendTelegramNotify(env, db, user, result.meta.last_row_id));
   }
 
+  await pruneSnapshots(db, env, user.user_id);
+
   return json({ ok: true, snap_id: result.meta.last_row_id, bytes: bytes.length });
+}
+
+// v2.6.3 storage efficiency: R2 is a short-lived cache, not an archive.
+// Count cap per user + hard age cap; both prune R2 and D1 together.
+async function pruneSnapshots(db, env, userId) {
+  if (!env.SNAPSHOTS) return;
+  try {
+    const cutoff = now() - SNAPSHOT_TTL_SECONDS;
+    const old = await db.prepare(
+      "SELECT snap_id, r2_key FROM snapshots WHERE user_id = ? AND (created_at < ? OR snap_id <= " +
+      "(SELECT snap_id FROM snapshots WHERE user_id = ? ORDER BY snap_id DESC LIMIT 1 OFFSET ?))"
+    ).bind(userId, cutoff, userId, MAX_SNAPSHOTS_PER_USER).all();
+    for (const row of old.results || []) {
+      try { await env.SNAPSHOTS.delete(row.r2_key); } catch (_) {}
+      await db.prepare("DELETE FROM snapshots WHERE snap_id = ?").bind(row.snap_id).run();
+    }
+  } catch (e) {
+    console.error("snapshot prune failed:", e.message);
+  }
+}
+
+async function handleSnapshotDelete(request, db, env, user) {
+  if (!env.SNAPSHOTS) return json({ ok: false, error: "snapshots_not_configured" }, 501);
+  const body = await request.json().catch(() => ({}));
+  const snapId = Number(body.snap_id);
+  if (!Number.isInteger(snapId) || snapId <= 0) return json({ ok: false, error: "bad_snap_id" }, 400);
+  const row = await db.prepare(
+    "SELECT snap_id, r2_key FROM snapshots WHERE snap_id = ? AND user_id = ?"
+  ).bind(snapId, user.user_id).first();
+  if (!row) return json({ ok: false, error: "unknown_snapshot" }, 404);
+  try { await env.SNAPSHOTS.delete(row.r2_key); } catch (_) {}
+  await db.prepare("DELETE FROM snapshots WHERE snap_id = ?").bind(snapId).run();
+  return json({ ok: true, deleted: snapId });
 }
 
 async function handleSnapshotFetch(request, db, env, user, snapId) {
@@ -1138,6 +1177,12 @@ export default {
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       if (u === "denied") return json({ ok: false, error: "denied" }, 403);
       return u ? handleClearAlert(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
+    if (path === "/api/snapshot/delete" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handleSnapshotDelete(request, db, env, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     if (path === "/api/poll" && request.method === "GET") {
       const u = await authUser(request, db);

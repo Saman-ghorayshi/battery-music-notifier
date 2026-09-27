@@ -266,6 +266,23 @@ fun DashScreen(
                     photo?.let {
                         Spacer(Modifier.height(8.dp))
                         Image(it.asImageBitmap(), contentDescription = "Intruder snapshot")
+                        // The Telegram copy is the permanent evidence; this
+                        // deletes only the relay's viewing copy.
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                scope.launch {
+                                    val sid = state?.snapshotId
+                                    if (sid != null) {
+                                        val r = withContext(Dispatchers.IO) {
+                                            prefs.newClient().deleteSnapshot(sid)
+                                        }
+                                        photo = null
+                                        status = if (r.ok) "Photo deleted (the Telegram copy stays)."
+                                                 else "Delete failed: ${r.error}"
+                                    }
+                                }
+                            },
+                        ) { Text("Delete photo", style = MaterialTheme.typography.labelSmall) }
                     }
                 }
             }

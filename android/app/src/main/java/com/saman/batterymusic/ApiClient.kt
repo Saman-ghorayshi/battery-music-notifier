@@ -152,6 +152,13 @@ class ApiClient(
             if (resp.has("snap_id")) resp.optLong("snap_id").toString() else null)
     }
 
+    /** Delete a snapshot (R2 object + metadata). The Telegram copy is the
+     *  permanent evidence -- this only clears the relay's viewing cache. */
+    fun deleteSnapshot(snapshotId: Long): ApiResult {
+        val resp = post("/api/snapshot/delete", JSONObject().put("snap_id", snapshotId))
+        return ApiResult(resp.optBoolean("ok"), resp.optString("error", "").ifEmpty { null })
+    }
+
     /** Download a snapshot's bytes, or null. Caller checks JPEG/PNG magic. */
     fun fetchSnapshot(snapshotId: Long): ByteArray? {
         return try {
