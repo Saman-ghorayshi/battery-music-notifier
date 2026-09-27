@@ -95,6 +95,13 @@ class Bridge:
     @staticmethod
     def _code_qr(code: str) -> str:
         import qrcode
+        from ..qrpair import build_pair_payload
+        # v2.7: encode the FULL payload (BMN1|relay|code) -- a bare code is
+        # not a pairing QR; the phone's scanner would reject it.
+        try:
+            code = build_pair_payload(self.manager.cfg.worker_url, code)
+        except Exception:
+            pass  # no worker_url configured: fall back to the bare code
         img = qrcode.make(code, box_size=6, border=2)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -118,6 +125,8 @@ class Bridge:
         "music_files": (list, None), "alarm_files": (list, None),
         "socket_secret": (str, None),
         "alarm_pin": (str, None), "alarm_output": (str, None),
+        "route_thief": (str, None), "route_battery": (str, None),
+        "escalate_minutes": (int, None),
     }
 
     def get_settings(self) -> dict:

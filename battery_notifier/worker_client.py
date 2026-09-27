@@ -27,11 +27,20 @@ class WorkerClient:
         self.config = config
         self._proxy = get_effective_proxy(config)
         self._proxies = {"http": self._proxy, "https": self._proxy} if self._proxy else None
-        # trust_env=False: "direct" must mean DIRECT. Without this, requests
-        # silently inherited the Windows system proxy (v2rayN), so the
-        # direct route was never direct and inherited its flakiness.
-        self._session = requests.Session()
-        self._session.trust_env = False
+        # v2.6.2: "direct" must mean DIRECT. requests with proxies=None
+        # silently inherits the Windows system proxy (v2rayN), so the direct
+        # route was never direct. An EXPLICIT empty dict overrides env.
+        self._direct_proxies = {"http": None, "https": None}
+        self._direct_requested = bool(config and getattr(config, "proxy_url", "") == "direct")
+        if self._direct_requested:
+            self._proxies = self._direct_proxies
+        # Route fallback: on a connection failure, retry once on the alternate
+        # route (direct <-> local proxy) and stick to whichever worked -- the
+        # middlebox resets TLS per fingerprint, not per route, so either can
+        # be the one that gets the alert through tonight.
+        self._alt_proxies = ({"http": None, "https": None}
+                             if self._proxy else
+                             {"http": "socks5h://127.0.0.1:10808", "https": "socks5h://127.0.0.1:10808"})
         # v2.6 route fallback: censorship middleboxes reset TLS selectively
         # (python-requests blocked direct one hour, the proxy the next).
         # A failed CONNECTION now retries once on the alternate route and
@@ -54,12 +63,12 @@ class WorkerClient:
         for proxies in routes:
             try:
                 if method == "POST":
-                    r = self._session.post(
+                    r = requests.post(
                         f"{self.base_url}{path}", json=payload,
                         headers=self._headers(), proxies=proxies, timeout=REQUEST_TIMEOUT,
                     )
                 else:
-                    r = self._session.get(
+                    r = requests.get(
                         f"{self.base_url}{path}", headers=self._headers(),
                         proxies=proxies, timeout=REQUEST_TIMEOUT,
                     )

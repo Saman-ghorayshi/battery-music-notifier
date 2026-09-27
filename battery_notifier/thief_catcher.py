@@ -291,10 +291,11 @@ class ThiefCatcher:
         if verbose:
             print(f"\n  !!! CHARGER UNPLUGGED !!! Battery: {battery_pct}%")
 
-        # ALWAYS play locally, in every mode: this machine is the one being
-        # carried away, so the stolen machine must scream even in relay mode
-        # where the "official" alarm is expected from another device.
-        if self.player: self.player.play()
+        # Routing decides: does THIS laptop scream, does the event cross the
+        # relay, or both? (The phone always rings for its own alerts.)
+        from .routing import wants_local, wants_relay
+        if wants_local(getattr(self.cfg, "route_thief", "both")):
+            if self.player: self.player.play()
 
         # Fullscreen PIN gate as its own PROCESS: the siren keeps playing
         # until an enrolled owner face is recognized (no PIN at all) or the
@@ -317,6 +318,11 @@ class ThiefCatcher:
 
         if mode == "telegram":
             self._send_telegram_alert("THIEF_ALERT", verbose)
+            return
+
+        if not wants_relay(getattr(self.cfg, "route_thief", "both")):
+            if verbose:
+                print("  [ROUTE] laptop-only -- not crossing the relay.")
             return
 
         # Bug #2 Fix: Only send local socket if worker fails or doesn't exist

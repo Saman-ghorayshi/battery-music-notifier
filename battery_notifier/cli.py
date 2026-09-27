@@ -135,6 +135,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Connection mode: auto (try local then cloud), local (socket/USB only, no Telegram), telegram (cloud only, skip discovery). Default: auto")
 
     # arm: thief catcher mode
+    gui_cmd = sub.add_parser("gui", help="Open the desktop GUI with the full guard auto-started.")
     pin_cmd = sub.add_parser("pin", help="Set the alarm PIN (the fullscreen gate asks for it).")
     pin_cmd.add_argument("new_pin", nargs="?", help="4-16 characters; prompts if omitted")
     arm = sub.add_parser("arm", help="Arm thief catcher: alarm if charger unplugged.")
@@ -811,6 +812,18 @@ socket_secret = "{esc(socket_secret)}"
 """)
         return 0
 
+    if args.cmd == "gui":
+        # One command for everything: the GUI auto-starts the relay listener
+        # and the socket server, so the window IS the control room.
+        import subprocess
+        exe = sys.executable
+        try:
+            subprocess.Popen([exe, "-m", "battery_notifier.gui"])
+            return 0
+        except Exception as e:
+            print(f"  [ERROR] Could not open the GUI: {e}")
+            return 1
+
     if args.cmd == "pin":
         setup_logging(False, cfg.log_file)
         import getpass as _gp
@@ -990,12 +1003,23 @@ socket_secret = "{esc(socket_secret)}"
                                 # listener tracks the episode silently.
                                 print(f"  [{_time.strftime('%H:%M:%S')}] THIEF alert active -- local ThiefCatcher is the alarm source, staying silent.")
                             else:
-                                print(f"  [{_time.strftime('%H:%M:%S')}] ALERT: {alert_type} (battery={battery_pct}%, charging={is_charging})")
-                                # THIEF = loop the siren; BATTERY = one song.
-                                player.annoying = _alert_annoying(alert_type)
-                                player.play()
-                                sound_started = _time.time()
-                                sound_active = True
+                                from .routing import wants_local as _wl, siren_due as _sd
+                                if not _wl(getattr(cfg, "route_thief", "both")):
+                                    pass  # phone-only: this laptop never rings
+                                elif _sd(_time.time() - (alert_ts or _time.time()),
+                                         getattr(cfg, "escalate_minutes", 0),
+                                         getattr(cfg, "route_thief", "both")):
+                                    print(f"  [{_time.strftime('%H:%M:%S')}] ALERT: {alert_type} (battery={battery_pct}%, charging={is_charging})")
+                                    # THIEF = loop the siren; BATTERY = one song.
+                                    player.annoying = _alert_annoying(alert_type)
+                                    player.play()
+                                    sound_started = _time.time()
+                                    sound_active = True
+                                else:
+                                    _escalating = getattr(cfg, "escalate_minutes", 0)
+                                    if not getattr(play, "_esc_note", False):
+                                        print(f"  [{_time.strftime('%H:%M:%S')}] phone-first: laptop siren holds {_escalating} min unless cleared.")
+                                        play._esc_note = True
                                 # PIN gate for THIEF episodes the relay is the
                                 # alarm source of: fullscreen, ignores Alt+F4,
                                 # only the PIN silences it. The gate checks the

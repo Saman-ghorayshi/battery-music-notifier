@@ -106,6 +106,21 @@
         </select>
         <label>Alarm PIN (fullscreen gate asks for it when the siren rings)</label>
         <input type="password" id="alarm_pin" placeholder="__SET__ means configured">
+        <label>Thief alarm route</label>
+        <select id="route_thief">
+          <option value="both">Laptop + phone (both scream)</option>
+          <option value="phone">Phone only (laptop silent)</option>
+          <option value="laptop">Laptop only (stays off the relay)</option>
+          <option value="phone_then_laptop">Phone first, laptop after escalation</option>
+        </select>
+        <label>Battery music route</label>
+        <select id="route_battery">
+          <option value="both">Laptop + phone</option>
+          <option value="phone">Phone only</option>
+          <option value="laptop">Laptop only</option>
+        </select>
+        <label>Escalation (minutes before the laptop joins a phone-first alarm)</label>
+        <input type="number" id="escalate_minutes" min="0" max="30" step="1">
       </div>
 
       <div class="card">

@@ -288,7 +288,7 @@ class ServiceManager:
     """Owns config + every background service; the single object the JS
     bridge talks to."""
 
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, auto_start: bool = True):
         self.cfg = Config.load(config_path)
         self.config_path = config_path
         self.bus = StatusBus()
@@ -298,6 +298,18 @@ class ServiceManager:
         self.heartbeat = HeartbeatService(self.cfg, self.bus)
         self.heartbeat.start()
         self._battery = Battery()
+        # v2.7 "one command, full control": opening the GUI brings the whole
+        # guard up -- relay listener (thief + phone alerts) and the local
+        # socket server. No more running three commands by hand.
+        if auto_start:
+            try:
+                self.start_relay()
+            except Exception as e:
+                log.warning("auto-start relay failed: %s", e)
+            try:
+                self.start_serve()
+            except Exception as e:
+                log.warning("auto-start serve failed: %s", e)
 
     # -- state -------------------------------------------------------------
 
@@ -360,6 +372,25 @@ class ServiceManager:
 
     def arm_thief(self, mode: str = "both", force: bool = False) -> dict:
         result = self.thief.arm(mode=mode, force=force)
+        # v2.7: arming here ALSO arms the ACCOUNT (the phone's toggle syncs)
+        # and makes sure a detached relay daemon keeps charger-watching even
+        # if this GUI closes -- thief mode must survive the app.
+        try:
+            if self.cfg.worker_url and self.cfg.worker_token:
+                from ..worker_client import WorkerClient
+                WorkerClient(self.cfg.worker_url, self.cfg.worker_token, self.cfg).arm_account(True)
+        except Exception as e:
+            log.warning("account arm failed (local guard still active): %s", e)
+        try:
+            import subprocess
+            import sys as _sys
+            exe = _sys.executable
+            pythonw = exe.lower().replace("python.exe", "pythonw.exe")
+            if pythonw and _sys.executable.lower() != pythonw.lower() and __import__("os").path.exists(pythonw):
+                subprocess.Popen([pythonw, "-m", "battery_notifier", "relay"],
+                                 creationflags=0x00000008)  # DETACHED: survives the GUI
+        except Exception as e:
+            log.debug("detached relay spawn skipped: %s", e)
         return result
 
     def disarm_thief(self) -> dict:

@@ -241,6 +241,11 @@ class Config:
     # of a device name to pin a specific output.
     alarm_pin: str = "6969"
     alarm_output: str = "auto"
+    # v2.7 routing: where each alarm makes noise.
+    #   both | phone | laptop | phone_then_laptop (escalate_minutes governs)
+    route_thief: str = "both"
+    route_battery: str = "both"
+    escalate_minutes: int = 2
 
     # Intruder guard (v2.1): webcam index used for failed-logon snapshots
     guard_camera_index: int = 0

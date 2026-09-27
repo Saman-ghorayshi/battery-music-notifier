@@ -46,6 +46,9 @@ class Monitor:
                         and getattr(self.cfg, "alert_at_low", True)):
                     should_alert = True
 
+                from .routing import wants_local
+                if should_alert and not wants_local(getattr(self.cfg, "route_battery", "both")):
+                    should_alert = False  # phone-only battery alerts: laptop silent
                 if should_alert and not self.player.playing:
                     if self.player.play():
                         self.notifier.send("Battery alert", f"{info.percentage}% reached.")
