@@ -231,6 +231,9 @@ class Config:
 
     # Local socket shared secret (optional, prevents LAN attackers from sending STOP)
     socket_secret: str = ""
+    # v2.6 mode toggles: which battery events play music at all.
+    alert_at_full: bool = True   # music when the battery reaches max (charging)
+    alert_at_low: bool = True    # music when the battery drops to min
     # v2.6 alarm hardening: the PIN the fullscreen gate asks for when the
     # thief alarm rings locally (owner types it to silence everything), and
     # which output the alarm plays through -- 'auto' forces built-in

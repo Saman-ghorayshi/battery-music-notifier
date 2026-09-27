@@ -107,6 +107,7 @@ class Bridge:
         "min_percentage": (int, None), "max_percentage": (int, None),
         "volume": (float, None), "poll_interval": (float, None),
         "annoying": (bool, None),
+        "alert_at_full": (bool, None), "alert_at_low": (bool, None),
         "quiet_hours": (list, None),
         "proxy_url": (str, None),
         "worker_url": (str, None), "admin_key": (str, None),

@@ -166,6 +166,8 @@ async function loadSettings() {
   $("max_percentage").value = st.max_percentage;
   $("volume").value = Math.round((st.volume ?? 0.8) * 100);
   $("poll_interval").value = st.poll_interval;
+  $("alert_at_full").checked = st.alert_at_full !== false;
+  $("alert_at_low").checked = st.alert_at_low !== false;
   $("annoying").checked = !!st.annoying;
   $("autostart").checked = !!st.autostart;
   $("worker_url").value = st.worker_url || "";
@@ -214,6 +216,8 @@ $("btn-save").addEventListener("click", async () => {
     volume: +$("volume").value / 100,
     poll_interval: +$("poll_interval").value,
     annoying: $("annoying").checked,
+    alert_at_full: $("alert_at_full").checked,
+    alert_at_low: $("alert_at_low").checked,
     quiet_hours: [+$("quiet-start").value, +$("quiet-end").value],
     proxy_url: proxyMode === "auto" ? ""
              : proxyMode === "direct" ? "direct"

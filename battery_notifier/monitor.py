@@ -39,9 +39,11 @@ class Monitor:
                 # or drops to min (discharging). Consistent with RemoteMonitor.
                 # This avoids false trigger when plugging in at mid-range.
                 should_alert = False
-                if info.charging and info.percentage >= self.cfg.max_percentage:
+                if (info.charging and info.percentage >= self.cfg.max_percentage
+                        and getattr(self.cfg, "alert_at_full", True)):
                     should_alert = True
-                elif not info.charging and info.percentage <= self.cfg.min_percentage:
+                elif (not info.charging and info.percentage <= self.cfg.min_percentage
+                        and getattr(self.cfg, "alert_at_low", True)):
                     should_alert = True
 
                 if should_alert and not self.player.playing:

@@ -151,11 +151,27 @@ private fun CameraPreviewWithScanner(onDecoded: (String) -> Unit) {
 fun decodeQr(proxy: ImageProxy, reader: MultiFormatReader): String? {
     return try {
         val plane = proxy.planes[0]
-        val buffer = plane.buffer
-        val data = ByteArray(buffer.remaining()).also { buffer.get(it) }
+        val data = ByteArray(plane.buffer.remaining()).also { plane.buffer.get(it) }
+        val text = decodeLuminance(data, plane.rowStride, proxy.width, proxy.height, reader)
+        text
+    } finally {
+        proxy.close()
+    }
+}
+
+/** Pure-JVM decode over a planar luminance plane -- the exact path the
+ *  camera frames take, testable without an Android device. */
+fun decodeLuminance(
+    data: ByteArray,
+    rowStride: Int,
+    width: Int,
+    height: Int,
+    reader: MultiFormatReader,
+): String? {
+    return try {
         val source = PlanarYUVLuminanceSource(
-            data, plane.rowStride, proxy.height,
-            0, 0, proxy.width, proxy.height, false,
+            data, rowStride, height,
+            0, 0, width, height, false,
         )
         val result = reader.decode(
             BinaryBitmap(HybridBinarizer(source)),
@@ -166,7 +182,5 @@ fun decodeQr(proxy: ImageProxy, reader: MultiFormatReader): String? {
         result.text
     } catch (_: Exception) {
         null
-    } finally {
-        proxy.close()
     }
 }

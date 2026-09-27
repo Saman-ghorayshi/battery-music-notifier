@@ -309,4 +309,25 @@ class DisarmKeyTest {
         assertNull(parsePairPayload(""))
         assertNull(parsePairPayload(null))
     }
+
+    @Test
+    fun scanner_decodes_the_exact_pair_qr_payload() {
+        // Generate the SAME QR the laptop renders, walk its pixels through
+        // the luminance decode path the camera frames take, and confirm the
+        // payload + parser survive the round trip.
+        val payload = "BMN1|https://battery-relay.example.dev|254670"
+        val matrix = com.google.zxing.qrcode.QRCodeWriter()
+            .encode(payload, com.google.zxing.BarcodeFormat.QR_CODE, 220, 220)
+        val w = matrix.width
+        val h = matrix.height
+        val lum = ByteArray(w * h)
+        for (y in 0 until h) for (x in 0 until w)
+            lum[y * w + x] = if (matrix.get(x, y)) 0 else 0xFF.toByte()
+
+        val decoded = decodeLuminance(lum, w, w, h, com.google.zxing.MultiFormatReader())
+        assertEquals(payload, decoded)
+        val parsed = parsePairPayload(decoded)
+        assertEquals("https://battery-relay.example.dev", parsed?.first)
+        assertEquals("254670", parsed?.second)
+    }
 }
