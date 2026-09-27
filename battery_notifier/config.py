@@ -21,7 +21,7 @@ _DPAPI_PREFIX = "dpapi:"
 _CRYPTPROTECT_UI_FORBIDDEN = 0x1
 
 # Fields whose values are secrets and get encrypted on save / decrypted on load
-SECRET_FIELDS = ("worker_token", "admin_key")
+SECRET_FIELDS = ("worker_token", "admin_key", "alarm_pin")
 
 
 def _dpapi_protect(data: bytes) -> bytes:

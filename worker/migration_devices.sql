@@ -16,3 +16,7 @@ CREATE TABLE IF NOT EXISTS devices(user_id INTEGER NOT NULL, token_hash TEXT UNI
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 
 ALTER TABLE users ADD COLUMN alert_origin TEXT;
+
+-- v2.6: alarm PIN hash (the fullscreen gate's clear credential). The
+-- plaintext lives only in the owner's config.toml.
+ALTER TABLE users ADD COLUMN alarm_pin_hash TEXT;

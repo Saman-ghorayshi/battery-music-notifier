@@ -135,6 +135,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Connection mode: auto (try local then cloud), local (socket/USB only, no Telegram), telegram (cloud only, skip discovery). Default: auto")
 
     # arm: thief catcher mode
+    pin_cmd = sub.add_parser("pin", help="Set the alarm PIN (the fullscreen gate asks for it).")
+    pin_cmd.add_argument("new_pin", nargs="?", help="4-16 characters; prompts if omitted")
     arm = sub.add_parser("arm", help="Arm thief catcher: alarm if charger unplugged.")
     arm.add_argument("--mode", choices=["local", "relay", "both", "telegram"], default="both",
                      help="Alert mode: local (play here), relay (send to worker), both (default), telegram (cloud only via bot description)")
@@ -151,7 +153,8 @@ def _build_parser() -> argparse.ArgumentParser:
     guard.add_argument("--config", type=Path)
 
     # guard-enroll: capture the owner's face for the guard's verdict
-    sub.add_parser("guard-enroll", help="Enroll your face for the intruder guard (runs the webcam ~20 frames).")
+    _ge = sub.add_parser("guard-enroll", help="Enroll your face for the intruder guard (runs the webcam ~20 frames).")
+    _ge.add_argument("-v", "--verbose", action="store_true")
 
     # v2.4: autostart the guard at logon (Task Scheduler, elevated)
     autostart = sub.add_parser("guard-autostart", help="Auto-run the intruder guard at every logon (Windows Task Scheduler).")
@@ -808,6 +811,38 @@ socket_secret = "{esc(socket_secret)}"
 """)
         return 0
 
+    if args.cmd == "pin":
+        setup_logging(False, cfg.log_file)
+        import getpass as _gp
+        new_pin = getattr(args, "new_pin", None) or _gp.getpass("  New alarm PIN (4-16 chars): ").strip()
+        if not (4 <= len(new_pin) <= 16):
+            print("  [ERROR] PIN must be 4-16 characters.")
+            return 1
+        cfg.alarm_pin = new_pin
+        from .config import encrypt_secret, harden_config_perms, APP_DIR as _APP_DIR
+        cfg_path = _APP_DIR / "config.toml"
+        if cfg_path.exists():
+            content = cfg_path.read_text(encoding="utf-8")
+            stored = encrypt_secret(new_pin)
+            if "alarm_pin" in content:
+                import re as _re
+                content = _re.sub(r'alarm_pin\s*=\s*"[^"]*"', f'alarm_pin = "{stored}"', content)
+            else:
+                content = content.rstrip() + chr(10) + 'alarm_pin = "' + stored + '"' + chr(10)
+            cfg_path.write_text(content, encoding="utf-8")
+            harden_config_perms(cfg_path)
+        # Sync the hash to the relay so the gate can clear its own alert.
+        synced = "not synced (no relay configured)"
+        if cfg.worker_url and cfg.worker_token:
+            try:
+                from .worker_client import WorkerClient
+                r = WorkerClient(cfg.worker_url, cfg.worker_token, cfg)._post("/api/pin/setup", {"pin": new_pin})
+                synced = "synced to relay" if r.get("ok") else f"sync failed: {r.get('error')}"
+            except Exception as e:
+                synced = f"sync failed: {e}"
+        print(f"  [OK] Alarm PIN set ({synced}). The fullscreen gate asks for it when the siren rings.")
+        return 0
+
     if args.cmd == "pass":
         setup_logging(False, cfg.log_file)
         from .worker_client import WorkerClient
@@ -954,19 +989,29 @@ socket_secret = "{esc(socket_secret)}"
                                 sound_active = True
                                 # PIN gate for THIEF episodes the relay is the
                                 # alarm source of: fullscreen, ignores Alt+F4,
-                                # only the PIN silences it. The gate also clears
-                                # the relay alert -- the owner is physically here.
+                                # only the PIN silences it. The gate checks the
+                                # face continuously (a recognized owner skips
+                                # the PIN) and clears the relay alert with the
+                                # PIN as proof when it succeeds.
                                 if (alert_type == "THIEF_ALERT"
                                         and getattr(cfg, "alarm_pin", "")):
-                                    def pin_gate():
-                                        from .alarm_gate import show_pin_gate
-                                        if show_pin_gate(cfg.alarm_pin):
+                                    from . import guardlock as _glock
+                                    from .alarm_gate import spawn_gate
+                                    gate_proc = spawn_gate(cfg.alarm_pin)
+                                    if gate_proc is not None:
+                                        def watch_gate(proc=gate_proc):
+                                            ok = proc.wait() == 0
                                             try:
-                                                worker.clear_alert()
-                                            except Exception as e:
-                                                log.warning("PIN clear failed: %s", e)
-                                            player.stop()
-                                    threading.Thread(target=pin_gate, name="alarm-pin-gate", daemon=True).start()
+                                                _glock.release(APP_DIR, "gate.lock")
+                                            except Exception:
+                                                pass
+                                            if ok:
+                                                try:
+                                                    worker.clear_alert(gate_pin=cfg.alarm_pin)
+                                                except Exception as e:
+                                                    log.warning("PIN clear failed: %s", e)
+                                                player.stop()
+                                        threading.Thread(target=watch_gate, name="alarm-pin-gate", daemon=True).start()
                         elif not alert_active and sound_active:
                             print(f"  [{_time.strftime('%H:%M:%S')}] Alert cleared.")
                             player.stop()

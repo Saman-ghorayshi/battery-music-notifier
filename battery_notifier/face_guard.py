@@ -351,7 +351,8 @@ def enroll(camera_index: int = 0, out_path: Path = None, frames: int = ENROLL_FR
     merged = list(_load_archive()) + samples
     merged = merged[-MAX_ARCHIVE_SAMPLES:]  # newest looks win if over cap
     recognizer = face.LBPHFaceRecognizer_create()
-    recognizer.train(merged, [0] * len(merged))
+    # cv2 5.x wants a numpy int32 label array, not a Python list.
+    recognizer.train(merged, __import__("numpy").array([0] * len(merged), dtype="int32"))
     save_model(recognizer, out_path)
     _save_archive(merged)
     print(f"  face model saved (encrypted): {out_path} "

@@ -122,12 +122,19 @@ class WorkerClient:
             log.error("Alert failed: %s", resp.get("error"))
         return False
 
-    def clear_alert(self) -> bool:
+    def clear_alert(self, gate_pin: str = None) -> bool:
         """Clear the active alert. Returns False if the worker refused or the
         call failed (e.g. 403 origin_cannot_clear: the device that raised a
         THIEF_ALERT is not allowed to clear it -- a thief re-plugging must not
-        silence the fleet). Callers only need to tolerate a False return."""
-        resp = self._post("/api/clear", {})
+        silence the fleet). Callers only need to tolerate a False return.
+
+        gate_pin: the alarm PIN typed into the fullscreen gate. The relay
+        checks its hash before honoring an origin clear -- the person at the
+        keyboard proving they know the PIN is exactly who may silence it."""
+        payload = {}
+        if gate_pin:
+            payload["gate_pin"] = gate_pin
+        resp = self._post("/api/clear", payload)
         if resp.get("ok"):
             return True
         error = resp.get("error", "unknown")

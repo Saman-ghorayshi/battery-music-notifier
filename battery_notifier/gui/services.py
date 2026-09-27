@@ -128,17 +128,32 @@ class RelayService(threading.Thread):
                         if alert_type == "THIEF_ALERT" and self.player:
                             self.player.play()
                             # PIN gate (same contract as the CLI relay): the
-                            # owner types the PIN to silence + clear.
+                            # gate checks the face continuously and asks for
+                            # the PIN only from unrecognized faces; success
+                            # silences + clears with the PIN as proof.
                             if getattr(self.cfg, "alarm_pin", ""):
-                                cfg_ref = self.cfg
-                                worker_ref = self.worker
-                                def gui_pin_gate():
-                                    from .alarm_gate import show_pin_gate
-                                    if show_pin_gate(cfg_ref.alarm_pin):
-                                        try: worker_ref.clear_alert()
-                                        except Exception: pass
-                                        if self.player: self.player.stop()
-                                threading.Thread(target=gui_pin_gate, name="alarm-pin-gate", daemon=True).start()
+                                from . import guardlock
+                                from .alarm_gate import spawn_gate
+                                gate_proc = spawn_gate(self.cfg.alarm_pin)
+                                if gate_proc is not None:
+                                    from battery_notifier.config import APP_DIR as _APP_DIR
+                                    cfg_ref = self.cfg
+                                    worker_ref = self.worker
+
+                                    def gui_gate_watch(proc=gate_proc):
+                                        ok = proc.wait() == 0
+                                        try:
+                                            guardlock.release(_APP_DIR, "gate.lock")
+                                        except Exception:
+                                            pass
+                                        if ok:
+                                            try:
+                                                worker_ref.clear_alert(gate_pin=cfg_ref.alarm_pin)
+                                            except Exception:
+                                                pass
+                                            if self.player:
+                                                self.player.stop()
+                                    threading.Thread(target=gui_gate_watch, name="alarm-pin-gate", daemon=True).start()
                     elif not alert_active and self._last_alert_active:
                         if self.player:
                             self.player.stop()

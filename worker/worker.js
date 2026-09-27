@@ -376,9 +376,10 @@ async function handleSendAlert(request, db, user, env, ctx) {
 }
 
 async function handleClearAlert(request, db, user) {
-  // Drain the body before any early return -- replying without consuming the
-  // bytes stalls the TCP stream (same rule as the router's early returns).
-  try { await request.arrayBuffer(); } catch (_) {}
+  // Parse the body ONCE, up front: reading it also drains the bytes (the
+  // TCP-stall rule) AND the gate_pin below needs it -- draining first with
+  // arrayBuffer left gate_pin permanently empty (seen live).
+  const body = await request.json().catch(() => ({}));
   const tokenHash = await presentedTokenHash(request);
   const ident = selfReportedIdentity(request, user);
   await touchDevice(db, user.user_id, tokenHash, ident.name, ident.platform, true);
@@ -387,7 +388,14 @@ async function handleClearAlert(request, db, user) {
   // alarm. BATTERY alerts and clears from the OTHER paired device stay free.
   if (user.alert_active && user.alert_type === "THIEF_ALERT" && tokenHash &&
       user.alert_origin === tokenHash) {
-    return json({ ok: false, error: "origin_cannot_clear" }, 403);
+    // The device that raised it may still silence it -- but only by proving
+    // the person at that machine knows the alarm PIN (typed into the
+    // fullscreen gate). A thief holding the laptop has the token but not
+    // the PIN. The other paired device clears freely, as always.
+    const gatePin = typeof body.gate_pin === "string" ? body.gate_pin : "";
+    if (!(gatePin && user.alarm_pin_hash && (await sha256(gatePin)) === user.alarm_pin_hash)) {
+      return json({ ok: false, error: "origin_cannot_clear" }, 403);
+    }
   }
   await db.prepare(
     "UPDATE users SET alert_active = 0, alert_type = '', last_seen = ? WHERE user_id = ?"
@@ -437,6 +445,20 @@ async function handlePoll(request, db, user) {
 // ---- v2.3: account-level arm/disarm + disarm pass ------------------------
 // The pass is the second factor for the dangerous direction: arming is free,
 // disarming (from any device) needs it. Only the sha256 lands in D1.
+
+// v2.6: the alarm PIN's HASH syncs here when the owner changes the alarm
+// PIN locally. It exists ONLY so the fullscreen gate can clear its own
+// THIEF alert with the PIN as the proof -- the plaintext never travels.
+async function handlePinSetup(request, db, user) {
+  const body = await request.json().catch(() => ({}));
+  const pin = (body.pin || "").trim();
+  if (!pin || pin.length < 4 || pin.length > 16) {
+    return json({ ok: false, error: "invalid_pin" }, 400);
+  }
+  await db.prepare("UPDATE users SET alarm_pin_hash = ? WHERE user_id = ?")
+    .bind(await sha256(pin), user.user_id).run();
+  return json({ ok: true });
+}
 
 async function handlePassSetup(request, db, user) {
   const body = await request.json().catch(() => ({}));
@@ -1145,6 +1167,12 @@ export default {
       return u ? handleNotifyClear(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     // v2.3 account-level arm/disarm + disarm pass
+    if (path === "/api/pin/setup" && request.method === "POST") {
+      const u = await authUser(request, db);
+      if (u === "banned") return json({ ok: false, error: "banned" }, 403);
+      if (u === "denied") return json({ ok: false, error: "denied" }, 403);
+      return u ? handlePinSetup(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+    }
     if (path === "/api/pass/setup" && request.method === "POST") {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);

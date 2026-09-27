@@ -100,6 +100,15 @@ def show_pin_gate(pin: str, on_success=None, use_face: bool = True) -> bool:
                    fg="#ff9f0a", bg="black")
     msg.pack(pady=6)
 
+    # The gate keeps LOOKING while it rings: walk back into frame, the
+    # camera recognizes an enrolled owner, and the alarm silences with no
+    # PIN at all. A stranger stays unrecognized -> the PIN stays required.
+    face_state = {"last": None}
+
+    def on_key(_event) -> None:
+        # Any key anywhere refocuses the entry so a thief cannot tab away.
+        entry.focus_set()
+
     def check(_event=None) -> None:
         if entry.get().strip() == str(pin):
             result["ok"] = True
@@ -113,14 +122,35 @@ def show_pin_gate(pin: str, on_success=None, use_face: bool = True) -> bool:
         msg.config(text="You cannot close this -- enter the PIN")
         root.after(50, lambda: root.attributes("-topmost", True))
 
+    def face_tick() -> None:
+        # Runs on the Tk event loop (scheduled via after), never inline:
+        # destroying the root from here must unwind through mainloop, not
+        # crash the remaining setup lines.
+        if not root.winfo_exists():
+            return
+        try:
+            verdict = face_check()
+        except Exception:
+            verdict = None
+        if not root.winfo_exists():
+            return
+        if verdict != face_state["last"]:
+            face_state["last"] = verdict
+            if verdict == "no_face":
+                msg.config(text="Looking for your face (recognized owners skip the PIN)...")
+            elif verdict == "unknown":
+                msg.config(text="Face not recognized -- enter the PIN")
+        if verdict == "owner":
+            result["ok"] = True
+            root.destroy()
+            return
+        root.after(2000, face_tick)
+
+    # ALL bindings first, THEN schedule the face loop on the event loop.
     entry.bind("<Return>", check)
     root.protocol("WM_DELETE_WINDOW", on_close)
-
-    def on_key(_event) -> None:
-        # Any key anywhere refocuses the entry so a thief cannot tab away.
-        entry.focus_set()
-
     root.bind("<Key>", on_key)
+    root.after(200, face_tick)
 
     root.mainloop()
 
@@ -135,20 +165,28 @@ def show_pin_gate(pin: str, on_success=None, use_face: bool = True) -> bool:
 def spawn_gate(pin: str):
     """Start the gate as a detached PROCESS (a Tk window in a secondary
     thread of a console process never paints reliably on Windows). Returns
-    the Popen handle -- poll .wait() or terminate() as the alarm evolves.
-    Exit code 0 = PIN accepted; 1 = closed without the PIN."""
+    the Popen handle, or None when a gate is already running -- one gate
+    per machine, so the owner never types the PIN twice. Exit code 0 =
+    PIN accepted (or a face was recognized); 1 = closed without either."""
     import subprocess
     import sys
+    from . import guardlock
+    from .config import APP_DIR
+    try:
+        if guardlock.acquire(APP_DIR, "gate.lock") is None:
+            log.info("PIN gate already running -- not spawning a second one")
+            return None
+    except Exception as e:
+        log.warning("gate.lock check failed: %s", e)
     exe = sys.executable
     if exe.lower().endswith("python.exe"):
         pythonw = exe[:-10] + "pythonw.exe"
         if os.path.exists(pythonw):
             exe = pythonw  # no console box behind the gate
-    creationflags = 0x00000008 if os.name == "nt" else 0  # DETACHED_PROCESS
-    return subprocess.Popen(
-        [exe, "-m", "battery_notifier.alarm_gate", str(pin)],
-        creationflags=creationflags,
-    )
+    # NO DETACHED_PROCESS: a detached process has no visible desktop, and
+    # the gate window would be INVISIBLE while the siren plays (seen live).
+    # pythonw already has no console, so plain Popen shows the window.
+    return subprocess.Popen([exe, "-m", "battery_notifier.alarm_gate", str(pin)])
 
 
 if __name__ == "__main__":

@@ -176,6 +176,23 @@ class Bridge:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(tomlkit.dumps(doc), encoding="utf-8")
         log.info("Settings saved to %s", path)
+
+        # v2.6: sync the alarm PIN's HASH to the relay whenever it changes --
+        # the fullscreen gate needs it to clear its own THIEF alert with the
+        # PIN as proof. Best-effort: without the sync the gate falls back to
+        # face-only (a stranger still cannot clear anything).
+        new_pin = getattr(old_cfg, "alarm_pin", "") or ""
+        prev = getattr(self, "_prev_alarm_pin", _MASK)
+        if new_pin and new_pin != _MASK and new_pin != prev:
+            try:
+                from .worker_client import WorkerClient
+                worker = WorkerClient(old_cfg.worker_url, old_cfg.worker_token, old_cfg)
+                r = worker._post("/api/pin/setup", {"pin": new_pin})
+                log.info("alarm PIN synced to relay: %s", r.get("ok"))
+            except Exception as e:
+                log.warning("alarm PIN sync failed: %s", e)
+        self._prev_alarm_pin = new_pin
+
         return {"ok": True}
 
     @staticmethod

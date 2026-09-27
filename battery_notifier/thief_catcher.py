@@ -296,13 +296,24 @@ class ThiefCatcher:
         # where the "official" alarm is expected from another device.
         if self.player: self.player.play()
 
-        # Fullscreen PIN gate: the siren keeps playing until the owner types
-        # the PIN (alarm_pin, default 6969). A thief closing the window
-        # changes nothing; the monitoring loop's re-plug branch can still
-        # stop the player underneath the gate.
+        # Fullscreen PIN gate as its own PROCESS: the siren keeps playing
+        # until an enrolled owner face is recognized (no PIN at all) or the
+        # PIN is typed. A thief closing the window changes nothing.
         if self.cfg and getattr(self.cfg, "alarm_pin", ""):
             from .alarm_gate import spawn_gate
             self._gate_proc = spawn_gate(self.cfg.alarm_pin)
+            if self._gate_proc is not None:
+                gate_proc_ref = self._gate_proc
+                gate_mode = mode
+                gate_pin_ref = self.cfg.alarm_pin
+
+                def gate_watch():
+                    # Exit code 0 = the owner proved themselves (face or PIN):
+                    # silence everything, with the PIN as the clear proof.
+                    if gate_proc_ref.wait() == 0:
+                        self._stop_alert(gate_mode, gate_pin=gate_pin_ref)
+
+                threading.Thread(target=gate_watch, name="alarm-pin-gate-watch", daemon=True).start()
 
         if mode == "telegram":
             self._send_telegram_alert("THIEF_ALERT", verbose)
@@ -321,8 +332,10 @@ class ThiefCatcher:
         if not worker_ok:
             self._send_local_socket("THIEF_ALERT")
 
-    def _stop_alert(self, mode: str) -> None:
-        """Stop the alarm."""
+    def _stop_alert(self, mode: str, gate_pin: str = None) -> None:
+        """Stop the alarm. gate_pin carries the alarm PIN typed into the
+        fullscreen gate -- the relay requires it when the origin device
+        clears its own THIEF alert (the thief has the token, not the PIN)."""
         # Local siren stops on every mode: _trigger_alert now plays locally
         # in every mode too, so there is always a local sound to stop.
         if self.player:
@@ -333,7 +346,7 @@ class ThiefCatcher:
 
         if mode in ("relay", "both") and self.worker:
             try:
-                ok = self.worker.clear_alert()
+                ok = self.worker.clear_alert(gate_pin=gate_pin)
                 if not ok:
                     # Expected with the new backend: the worker rejects
                     # THIEF-clear by the origin token (403 origin_cannot_clear)
