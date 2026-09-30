@@ -407,7 +407,7 @@ async function handleClearAlert(request, db, user) {
   return json({ ok: true, alert_active: 0 });
 }
 
-async function handlePoll(request, db, user) {
+async function handlePoll(request, db, env, ctx, user) {
   // User polls their own state (laptop checks if phone sent alert).
   // Latest snapshot rides along so the poller can pull the photo.
   const tokenHash = await presentedTokenHash(request);
@@ -1188,7 +1188,7 @@ export default {
       const u = await authUser(request, db);
       if (u === "banned") return json({ ok: false, error: "banned" }, 403);
       if (u === "denied") return json({ ok: false, error: "denied" }, 403);
-      return u ? handlePoll(request, db, u) : json({ ok: false, error: "unauthorized" }, 401);
+      return u ? handlePoll(request, db, env, ctx, u) : json({ ok: false, error: "unauthorized" }, 401);
     }
     // v2.1 intruder snapshots
     if (path === "/api/snapshot" && request.method === "POST") {
