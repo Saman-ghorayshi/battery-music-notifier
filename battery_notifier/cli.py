@@ -818,7 +818,9 @@ socket_secret = "{esc(socket_secret)}"
         import subprocess
         exe = sys.executable
         try:
-            subprocess.Popen([exe, "-m", "battery_notifier.gui"])
+            # the gui package has no __main__; run its entry function directly
+            subprocess.Popen([exe, "-c",
+                              "from battery_notifier.gui.app import main; raise SystemExit(main() or 0)"])
             return 0
         except Exception as e:
             print(f"  [ERROR] Could not open the GUI: {e}")
