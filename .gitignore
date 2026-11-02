@@ -17,3 +17,4 @@ last_server.json
 
 relay-node/logs/
 build_version.txt
+*.db

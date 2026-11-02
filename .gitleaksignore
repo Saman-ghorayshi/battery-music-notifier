@@ -1,0 +1,13 @@
+# Rotated historical staging admin key (plan.md)
+6ad0a2d72de6f7ed66a1680cae81ee71014c199f:plan.md:generic-api-key:464
+
+# Mock tokens in tests/test_worker_thief.py
+84141185ccf0aedfeb7a0b4e4c0bac7629d2653f:tests/test_worker_thief.py:generic-api-key:312
+84141185ccf0aedfeb7a0b4e4c0bac7629d2653f:tests/test_worker_thief.py:generic-api-key:318
+
+# Mock tokens in tests/test_guardlock_and_secrets.py
+ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:192
+ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:202
+ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:209
+ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:220
+ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:240

@@ -1,13 +1,22 @@
 title = "gitleaks config"
 
-# Known historical leak, secret rotated 2026-08-29 (staging ADMIN_KEY was
-# committed to plan.md). Fingerprint allowlisted so history scans stay green;
-# the secret itself is dead.
+# Known historical leaks and test fixtures. Fingerprints allowlisted so
+# history scans stay green; real secrets are rotated.
 [extend]
 useDefault = true
 
 [allowlist]
-  description = "Rotated historical leaks"
+  description = "Rotated historical leaks and test mocks"
+  paths = [
+    '''tests/test_.*\.py''',
+  ]
   fingerprints = [
     "6ad0a2d72de6f7ed66a1680cae81ee71014c199f:plan.md:generic-api-key:464",
+    "84141185ccf0aedfeb7a0b4e4c0bac7629d2653f:tests/test_worker_thief.py:generic-api-key:312",
+    "84141185ccf0aedfeb7a0b4e4c0bac7629d2653f:tests/test_worker_thief.py:generic-api-key:318",
+    "ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:192",
+    "ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:202",
+    "ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:209",
+    "ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:220",
+    "ad70de03e93278ee5c3f48ce65ce08d54a2a4e76:tests/test_guardlock_and_secrets.py:generic-api-key:240",
   ]
